@@ -257,7 +257,7 @@ class TestOwnerAlerts:
     def _session(self, tmp_path: Path, body: str = "stale") -> tuple[CookieSession, Path]:
         export = tmp_path / "cookies.txt"
         export.write_text(body)
-        return CookieSession(export, workdir=tmp_path / "work"), export
+        return CookieSession(export), export
 
     async def test_expired_cookies_reach_the_owner_and_only_the_owner(
         self, harness: BotHarness, settings: Settings, tmp_path: Path
@@ -301,9 +301,9 @@ class TestOwnerAlerts:
         alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
         await alerts.auth_expired("NSFW")
 
-        working = cookies.path_for_download()
-        assert working is not None
-        working.write_text("rewritten by yt-dlp")
+        staged = cookies.stage_into(tmp_path / "req-1")
+        assert staged is not None
+        staged.write_text("rewritten by yt-dlp")
         await alerts.auth_expired("NSFW")
 
         assert len(harness.session.calls_of(SendMessage)) == 1
@@ -333,6 +333,35 @@ class TestOwnerAlerts:
 
         await alerts.auth_expired("NSFW")
         harness.session.fail_on.clear()
+        await alerts.auth_expired("NSFW")
+
+        assert len(harness.session.calls_of(SendMessage)) == 2
+
+    async def test_a_file_being_swapped_right_now_is_not_mistaken_for_a_new_session(
+        self, harness: BotHarness, settings: Settings, tmp_path: Path
+    ) -> None:
+        # An unreadable export means "cannot tell which session this is", not
+        # "a fresh one". Treating it as fresh sends the owner a duplicate in
+        # exactly the moment they are already replacing the file.
+        cookies, export = self._session(tmp_path)
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
+        await alerts.auth_expired("NSFW")
+
+        export.unlink()
+        await alerts.auth_expired("NSFW")
+
+        assert len(harness.session.calls_of(SendMessage)) == 1
+
+    async def test_the_alert_re_arms_once_the_new_export_lands(
+        self, harness: BotHarness, settings: Settings, tmp_path: Path
+    ) -> None:
+        cookies, export = self._session(tmp_path)
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
+        await alerts.auth_expired("NSFW")
+        export.unlink()
+        await alerts.auth_expired("NSFW")
+
+        export.write_text("the replacement the owner just exported")
         await alerts.auth_expired("NSFW")
 
         assert len(harness.session.calls_of(SendMessage)) == 2

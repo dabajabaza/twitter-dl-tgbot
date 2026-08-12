@@ -132,6 +132,16 @@ class ClipDelivery:
             raise ShareUnavailable(message or f"rclone exited with {process.returncode}")
 
 
+def _utf16_length(text: str) -> int:
+    """Length as Telegram counts it: UTF-16 code units, not code points.
+
+    Anything outside the basic plane — an emoji, most notably — is two units to
+    Telegram and one character to Python, so counting characters lets a caption
+    Telegram considers too long slip through.
+    """
+    return len(text.encode("utf-16-le")) // 2
+
+
 def _fit_caption(caption: str) -> str:
     """Keep the caption inside the Bot API's limit.
 
@@ -139,9 +149,15 @@ def _fit_caption(caption: str) -> str:
     and loses a clip that downloaded perfectly well — and tweet URLs carry
     arbitrarily long tracking tails.
     """
-    if len(caption) <= _CAPTION_LIMIT:
+    if _utf16_length(caption) <= _CAPTION_LIMIT:
         return caption
-    return caption[: _CAPTION_LIMIT - 1] + "…"
+    # Trimmed one character at a time from the end rather than sliced by index:
+    # a slice at a fixed offset can land between the halves of a surrogate pair
+    # and produce a caption Telegram rejects outright.
+    kept = caption
+    while kept and _utf16_length(kept) > _CAPTION_LIMIT - 1:
+        kept = kept[:-1]
+    return kept + "…"
 
 
 def share_name(clip: Clip, *, index: int = 1, total: int = 1) -> str:

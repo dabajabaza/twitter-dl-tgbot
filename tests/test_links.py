@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import pytest
 
 from twitter_dl.errors import NotATweetLink
@@ -99,81 +101,171 @@ class TestLinksThatArriveGluedOrOutOfOrder:
         assert extract_links(url) == [url]
 
 
-class TestShortLinkResolution:
-    """t.co points wherever the tweet's author decided — including inward."""
+@dataclass
+class Hop:
+    """One scripted HTTP answer."""
 
-    async def test_a_redirect_off_x_is_refused_before_it_is_requested(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    status: int = 200
+    location: str | None = None
+    body: bytes = b""
+    url: str = ""
+
+
+class RecordingHttp:
+    """A fake aiohttp session that records every URL actually requested.
+
+    Recording is the point: the guard under test is "the bot never even asks",
+    so a test that only checks which exception came back cannot tell a working
+    guard from a missing one.
+    """
+
+    def __init__(self, hops: list[Hop]) -> None:
+        self.hops = hops
+        self.requested: list[str] = []
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> "RecordingHttp":
         import aiohttp
 
-        requested: list[str] = []
+        recorder = self
 
-        class Boom:
-            def __init__(self, *args: object, **kwargs: object) -> None:
-                pass
+        class FakeContent:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
 
-            async def __aenter__(self) -> "Boom":
+            async def read(self, limit: int = -1) -> bytes:
+                return self._body
+
+        class FakeResponse:
+            def __init__(self, hop: Hop, url: str) -> None:
+                self.status = hop.status
+                self.headers = {"Location": hop.location} if hop.location else {}
+                self.url = hop.url or url
+                self.content = FakeContent(hop.body)
+
+            async def __aenter__(self) -> "FakeResponse":
                 return self
 
             async def __aexit__(self, *args: object) -> None:
                 return None
 
-            def get(self, url: str, **kwargs: object) -> object:
-                requested.append(url)
-                raise AssertionError(f"must not request {url}")
+        class FakeSession:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
 
-        monkeypatch.setattr(aiohttp, "ClientSession", Boom)
+            async def __aenter__(self) -> "FakeSession":
+                return self
 
-        # The bot sits on the home LAN with the router's admin panel one hop
-        # away; a forwarded tweet must not be able to make it knock there.
+            async def __aexit__(self, *args: object) -> None:
+                return None
+
+            def get(self, url: str, **kwargs: object) -> FakeResponse:
+                recorder.requested.append(url)
+                index = min(len(recorder.requested) - 1, len(recorder.hops) - 1)
+                return FakeResponse(recorder.hops[index], url)
+
+        monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
+        return self
+
+
+TWEET = "https://x.com/someone/status/1234567890"
+
+
+class TestShortLinkResolution:
+    """t.co points wherever the tweet's author decided — including inward."""
+
+    async def test_a_link_that_is_not_even_on_x_is_never_requested(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        http = RecordingHttp([Hop()]).install(monkeypatch)
+
         with pytest.raises(NotATweetLink):
             await resolve_short_link("https://evil.example/redirect")
-        assert requested == []
 
-    async def test_a_shortlink_leading_to_a_tweet_resolves(
+        assert http.requested == []
+
+    async def test_a_redirect_pointing_into_the_lan_is_never_followed(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        target = "https://x.com/someone/status/1234567890"
-        _install_fake_session(monkeypatch, status=301, location=target)
-
-        assert await resolve_short_link("https://t.co/AbC123") == target
-
-    async def test_a_shortlink_leading_anywhere_else_is_a_user_mistake(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _install_fake_session(monkeypatch, status=301, location="https://example.com/article")
+        # The invariant the hand-rolled redirect loop exists for. The jail
+        # shares the host's network stack, so the router's admin panel is one
+        # hop away — and the author of a tweet chooses where t.co points.
+        # Asserting only on the exception is not enough: a loop that checked
+        # just the entry URL would still raise (redirect limit) after happily
+        # fetching the LAN address several times.
+        http = RecordingHttp([Hop(status=302, location="http://192.168.1.1/rci/")]).install(
+            monkeypatch
+        )
 
         with pytest.raises(NotATweetLink):
             await resolve_short_link("https://t.co/AbC123")
 
+        assert http.requested == ["https://t.co/AbC123"]
+        assert not any("192.168.1.1" in url for url in http.requested)
 
-def _install_fake_session(monkeypatch: pytest.MonkeyPatch, *, status: int, location: str) -> None:
-    import aiohttp
+    async def test_a_shortlink_leading_to_a_tweet_resolves(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        RecordingHttp([Hop(status=301, location=TWEET)]).install(monkeypatch)
 
-    class FakeResponse:
-        def __init__(self) -> None:
-            self.status = status
-            self.headers = {"Location": location}
-            self.url = location
+        assert await resolve_short_link("https://t.co/AbC123") == TWEET
 
-        async def __aenter__(self) -> "FakeResponse":
-            return self
+    async def test_a_chain_of_hops_inside_x_is_followed_to_the_tweet(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        http = RecordingHttp(
+            [
+                Hop(status=301, location="https://t.co/Second"),
+                Hop(status=301, location=TWEET),
+            ]
+        ).install(monkeypatch)
 
-        async def __aexit__(self, *args: object) -> None:
-            return None
+        assert await resolve_short_link("https://t.co/AbC123") == TWEET
+        assert http.requested == ["https://t.co/AbC123", "https://t.co/Second"]
 
-    class FakeSession:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            pass
+    async def test_an_html_interstitial_still_yields_the_tweet(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # t.co sometimes answers 200 with a page whose meta-refresh carries the
+        # target, instead of a redirect. Reading the body is the whole reason
+        # the loop does not simply stop at a non-redirect answer.
+        body = f'<html><meta http-equiv="refresh" content="0;URL={TWEET}"></html>'.encode()
+        RecordingHttp([Hop(status=200, body=body, url="https://t.co/AbC123")]).install(monkeypatch)
 
-        async def __aenter__(self) -> "FakeSession":
-            return self
+        assert await resolve_short_link("https://t.co/AbC123") == TWEET
 
-        async def __aexit__(self, *args: object) -> None:
-            return None
+    async def test_an_answer_that_is_already_the_tweet_needs_no_body(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        RecordingHttp([Hop(status=200, url=TWEET)]).install(monkeypatch)
 
-        def get(self, url: str, **kwargs: object) -> FakeResponse:
-            return FakeResponse()
+        assert await resolve_short_link("https://t.co/AbC123") == TWEET
 
-    monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
+    async def test_a_shortlink_leading_anywhere_else_is_a_user_mistake(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        http = RecordingHttp([Hop(status=301, location="https://example.com/article")]).install(
+            monkeypatch
+        )
+
+        with pytest.raises(NotATweetLink):
+            await resolve_short_link("https://t.co/AbC123")
+
+        assert http.requested == ["https://t.co/AbC123"]
+
+    async def test_a_redirect_loop_inside_x_gives_up(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        http = RecordingHttp([Hop(status=301, location="https://t.co/Loop")]).install(monkeypatch)
+
+        with pytest.raises(NotATweetLink):
+            await resolve_short_link("https://t.co/AbC123")
+
+        assert len(http.requested) <= 5
+
+    async def test_an_interstitial_that_leads_nowhere_useful_is_reported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        RecordingHttp(
+            [Hop(status=200, body=b"<html>nothing here</html>", url="https://t.co/AbC123")]
+        ).install(monkeypatch)
+
+        with pytest.raises(NotATweetLink):
+            await resolve_short_link("https://t.co/AbC123")

@@ -15,6 +15,7 @@ from twitter_dl.services.delivery import (
     ChatDelivery,
     ClipDelivery,
     ShareDelivery,
+    _fit_caption,
     share_name,
 )
 
@@ -214,3 +215,33 @@ class TestUploadDetails:
         await build_delivery(harness, max_chat_mb=1).deliver(clip, chat_id=42, caption="x")
 
         assert "--inplace" in rclone_calls[0]
+
+
+class TestCaptionLength:
+    """Telegram counts a caption in UTF-16 code units, Python counts characters."""
+
+    def test_a_plain_caption_is_left_alone(self) -> None:
+        assert _fit_caption("https://x.com/a/status/1") == "https://x.com/a/status/1"
+
+    def test_an_emoji_heavy_caption_is_measured_the_way_telegram_measures_it(self) -> None:
+        # 600 emoji are 600 characters to Python but 1200 units to Telegram —
+        # under the limit by one count, over it by the one that matters, and
+        # the 400 that follows costs a clip that downloaded perfectly well.
+        caption = "😀" * 600
+
+        fitted = _fit_caption(caption)
+
+        assert len(fitted.encode("utf-16-le")) // 2 <= 1024
+
+    def test_trimming_never_splits_a_surrogate_pair(self) -> None:
+        fitted = _fit_caption("😀" * 600)
+
+        # A caption cut between the halves of a pair is rejected outright, and
+        # re-encoding is what would reveal it.
+        assert fitted.encode("utf-16-le").decode("utf-16-le") == fitted
+
+    def test_a_long_ascii_caption_is_trimmed_to_the_limit(self) -> None:
+        fitted = _fit_caption("z" * 5000)
+
+        assert len(fitted) <= 1024
+        assert fitted.endswith("…")

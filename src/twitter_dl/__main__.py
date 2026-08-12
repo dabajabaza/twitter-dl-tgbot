@@ -181,7 +181,7 @@ async def _run_bot(settings: Settings) -> None:
     bot = Bot(token=settings.bot_token, session=session)
 
     queue = RequestQueue(settings.queue_limit)
-    cookies = CookieSession(settings.cookies_file, workdir=settings.download_dir)
+    cookies = CookieSession(settings.cookies_file)
     worker = RequestWorker(
         queue=queue,
         downloader=YtDlpDownloader(cookies=cookies, proxy=settings.ytdlp_proxy),

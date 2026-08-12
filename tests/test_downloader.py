@@ -169,11 +169,15 @@ class TestCookiesAreACopy:
 
         export = tmp_path / "cookies.txt"
         export.write_text("netscape")
-        cookies = CookieSession(export, workdir=tmp_path / "work")
+        cookies = CookieSession(export)
 
-        options = module.YtDlpDownloader(cookies=cookies)._options(tmp_path, lambda s: None)
+        scratch = tmp_path / "req-1"
+        options = module.YtDlpDownloader(cookies=cookies)._options(scratch, lambda s: None)
 
         assert options["cookiefile"] != str(export)
+        # Inside this request's own scratch, so an abandoned download cannot
+        # rewrite the file the next request is reading.
+        assert Path(options["cookiefile"]).parent == scratch
         assert Path(options["cookiefile"]).read_text() == "netscape"
 
     def test_without_cookies_the_option_is_absent_rather_than_empty(self, tmp_path: Path) -> None:

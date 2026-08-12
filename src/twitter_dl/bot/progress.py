@@ -14,7 +14,6 @@ Two properties this class owes the rest of the bot:
 """
 
 import asyncio
-import contextlib
 import logging
 from time import monotonic
 
@@ -106,10 +105,16 @@ class ProgressReporter:
         flusher, self._flusher = self._flusher, None
         if flusher is not None and not flusher.done():
             flusher.cancel()
-            # Cancelling our own helper is expected; the request itself is not
-            # being cancelled, so this must not propagate.
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await flusher
+            except asyncio.CancelledError:
+                # Cancelling our own helper is expected and must not propagate.
+                # But if the *caller* is what is being cancelled — a shutdown
+                # arriving exactly while we wait here — swallowing it would
+                # strand the worker mid-teardown, so that case is handed back.
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    raise
 
     async def _flush(self) -> None:
         while self._pending is not None and not self._closed:

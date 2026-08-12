@@ -137,7 +137,12 @@ class OwnerAlerts:
 
     async def auth_expired(self, detail: str) -> None:
         version = self._cookies.version() if self._cookies else None
-        if self._alerted and self._alerted_version == version:
+        # `None` means "cannot tell which export this is" — the file is being
+        # replaced right now, or stat failed. That is not evidence of a new
+        # session, so it must not re-arm the alert: the owner mid-swap would
+        # otherwise get a duplicate, and the remembered version would be
+        # clobbered with None.
+        if self._alerted and (version is None or self._alerted_version == version):
             return
         try:
             await self._bot.send_message(

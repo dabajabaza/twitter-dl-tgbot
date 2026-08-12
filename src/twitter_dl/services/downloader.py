@@ -191,9 +191,11 @@ class YtDlpDownloader:
             "socket_timeout": 30,
             "retries": 3,
         }
-        # A working copy, never the owner's export: yt-dlp rewrites this file on
-        # every run (see services/cookies.py).
-        cookiefile = self._cookies.path_for_download() if self._cookies else None
+        # A throwaway copy inside this request's own scratch directory, never
+        # the owner's export: yt-dlp rewrites the cookie file it is given on
+        # every run, including on the way out of an abandoned download (see
+        # services/cookies.py).
+        cookiefile = self._cookies.stage_into(dest) if self._cookies else None
         if cookiefile is not None:
             options["cookiefile"] = str(cookiefile)
         if self._proxy is not None:
