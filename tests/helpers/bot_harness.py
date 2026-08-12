@@ -1,5 +1,6 @@
 """Driving a real dispatcher through fabricated updates, without a network."""
 
+import asyncio
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -29,6 +30,7 @@ class RecordingSession(BaseSession):
     def __init__(self) -> None:
         super().__init__()
         self.calls: list[TelegramMethod[Any]] = []
+        self.timeouts: list[int | None] = []
         self.fail_on: dict[str, Exception] = {}
         self._next_message_id = 5000
 
@@ -45,6 +47,12 @@ class RecordingSession(BaseSession):
         self, bot: Bot, method: TelegramMethod[Any], timeout: int | None = None
     ) -> Any:
         self.calls.append(method)
+        self.timeouts.append(timeout)
+        # A real API call always yields to the event loop. Without this the
+        # double is atomic, and every concurrency bug in the code under test —
+        # a stale progress edit landing after a verdict, two edits racing for
+        # one message — becomes structurally impossible to reproduce.
+        await asyncio.sleep(0)
         name = type(method).__name__
         if name in self.fail_on:
             raise self.fail_on[name]
@@ -68,6 +76,13 @@ class RecordingSession(BaseSession):
         raise_for_status: bool = True,
     ) -> AsyncGenerator[bytes, None]:
         yield b""
+
+    def timeout_of(self, method_type: type[M]) -> int | None:
+        """The request_timeout the code passed for one method."""
+        for method, timeout in zip(self.calls, self.timeouts, strict=True):
+            if isinstance(method, method_type):
+                return timeout
+        raise AssertionError(f"{method_type.__name__} was never called")
 
     def calls_of(self, method_type: type[M]) -> list[M]:
         """Every recorded call of one method, typed as that method.

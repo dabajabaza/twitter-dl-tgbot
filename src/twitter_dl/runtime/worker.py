@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Protocol
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError
 
 from twitter_dl.bot import texts
 from twitter_dl.bot.progress import ProgressReporter
@@ -32,6 +31,7 @@ from twitter_dl.errors import (
     TweetUnavailable,
     TwitterDlError,
 )
+from twitter_dl.services.cookies import CookieSession
 from twitter_dl.services.delivery import DeliveryResult, ShareDelivery
 from twitter_dl.services.links import is_short_link, resolve_short_link
 
@@ -121,41 +121,41 @@ class RequestQueue:
 class OwnerAlerts:
     """Tells the owner about the one failure only they can fix.
 
-    Deduplicated by the cookie file's mtime: the owner hears once per session
+    Deduplicated by the identity of the owner's cookie *export* — which the bot
+    never writes to (see services/cookies.py) — so the owner hears once per
     export, and replacing the file re-arms the alert. Counting successes instead
-    would go quiet at the wrong moment — public tweets keep downloading with a
+    would go quiet at the wrong moment: public tweets keep downloading with a
     dead session, which is precisely why the breakage is easy to miss.
     """
 
-    def __init__(self, bot: Bot, *, owner_id: int, cookies_file: Path | None) -> None:
+    def __init__(self, bot: Bot, *, owner_id: int, cookies: CookieSession | None) -> None:
         self._bot = bot
         self._owner_id = owner_id
-        self._cookies_file = cookies_file
+        self._cookies = cookies
         self._alerted = False
-        self._alerted_mtime: float | None = None
+        self._alerted_version: tuple[float, int] | None = None
 
     async def auth_expired(self, detail: str) -> None:
-        mtime = self._cookies_mtime()
-        if self._alerted and self._alerted_mtime == mtime:
+        version = self._cookies.version() if self._cookies else None
+        if self._alerted and self._alerted_version == version:
             return
-        self._alerted = True
-        self._alerted_mtime = mtime
-        path = str(self._cookies_file) if self._cookies_file else "COOKIES_FILE"
         try:
             await self._bot.send_message(
                 chat_id=self._owner_id,
-                text=texts.OWNER_AUTH_EXPIRED.format(path=path, detail=detail),
+                text=texts.OWNER_AUTH_EXPIRED.format(path=self._cookies_path(), detail=detail),
             )
-        except TelegramAPIError as exc:
-            logger.warning("could not alert the owner: %s", exc)
+        except Exception as exc:
+            # The alert is not marked as delivered, so the next private tweet
+            # tries again. Marking first and sending second would lose the one
+            # signal this bot owes the owner to a single flap of the proxy.
+            logger.warning("could not alert the owner: %s: %s", type(exc).__name__, exc)
+            return
+        self._alerted = True
+        self._alerted_version = version
 
-    def _cookies_mtime(self) -> float | None:
-        if self._cookies_file is None:
-            return None
-        try:
-            return self._cookies_file.stat().st_mtime
-        except OSError:
-            return None
+    def _cookies_path(self) -> str:
+        source = self._cookies.source if self._cookies else None
+        return str(source) if source else "COOKIES_FILE"
 
 
 class RequestWorker:
@@ -264,8 +264,21 @@ def _progress_into(reporter: ProgressReporter) -> Callable[[str], None]:
 
 
 async def _say(request: Request, text: str) -> None:
-    """Deliver a verdict, tolerating a chat that has since become unreachable."""
+    """Deliver a verdict. Never raises.
+
+    This is the last thing the worker does for a request, and it runs from the
+    worker's own error handler — so an exception escaping here would end the
+    only queue consumer and leave every later request queued forever, with no
+    error visible anywhere. Catches every exception rather than
+    TelegramAPIError, because a Telegram front end answering with an HTML error
+    page raises ClientDecodeError, which is not one of those.
+    """
     try:
         await request.reporter.finish(text)
-    except TelegramAPIError as exc:
-        logger.warning("could not report the outcome to %s: %s", request.chat_id, exc)
+    except Exception as exc:
+        logger.warning(
+            "could not report the outcome to %s: %s: %s",
+            request.chat_id,
+            type(exc).__name__,
+            exc,
+        )

@@ -33,3 +33,15 @@ async def test_group_traffic_is_ignored_even_from_an_allowed_user(harness: BotHa
     await harness.send(TWEET, user_id=OWNER_ID, chat_type="supergroup")
     assert harness.session.calls == []
     assert harness.queue.load == 0
+
+
+async def test_a_stranger_leaves_nothing_behind_in_memory(harness: BotHarness) -> None:
+    # aiogram resolves an FSM context before any gate registered here can run,
+    # so the default MemoryStorage (a defaultdict) recorded a key per sender —
+    # unbounded growth driven by people who are refused anyway.
+    for offset in range(20):
+        await harness.send("hi", user_id=STRANGER_ID + offset)
+
+    records = getattr(harness.dp.fsm.storage, "storage", None)
+    assert not records
+    assert harness.session.calls == []

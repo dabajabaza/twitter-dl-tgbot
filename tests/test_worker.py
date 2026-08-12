@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+from aiogram.exceptions import ClientDecodeError, TelegramNetworkError
 from aiogram.methods import DeleteMessage, EditMessageText, SendMessage
 
 from tests.helpers.bot_harness import BotHarness
@@ -22,6 +23,7 @@ from twitter_dl.runtime.worker import (
     RequestQueue,
     RequestWorker,
 )
+from twitter_dl.services.cookies import CookieSession
 from twitter_dl.services.delivery import ChatDelivery, DeliveryResult, ShareDelivery
 
 TWEET = "https://x.com/someone/status/1234567890"
@@ -77,7 +79,7 @@ def build_worker(
         queue=harness.queue,
         downloader=downloader or FakeDownloader(),
         delivery=delivery or FakeDelivery(),
-        alerts=alerts or OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies_file=None),
+        alerts=alerts or OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=None),
         settings=settings,
     )
 
@@ -88,10 +90,10 @@ def make_request(harness: BotHarness, url: str = TWEET) -> Request:
 
 
 @asynccontextmanager
-async def running(worker: RequestWorker) -> AsyncIterator[None]:
+async def running(worker: RequestWorker) -> AsyncIterator[asyncio.Task[None]]:
     task = asyncio.create_task(worker.run())
     try:
-        yield
+        yield task
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -252,12 +254,16 @@ async def test_an_unexpected_crash_does_not_wedge_the_queue_for_everyone_else(
 class TestOwnerAlerts:
     """The one failure worth waking the owner for, and how often."""
 
+    def _session(self, tmp_path: Path, body: str = "stale") -> tuple[CookieSession, Path]:
+        export = tmp_path / "cookies.txt"
+        export.write_text(body)
+        return CookieSession(export, workdir=tmp_path / "work"), export
+
     async def test_expired_cookies_reach_the_owner_and_only_the_owner(
         self, harness: BotHarness, settings: Settings, tmp_path: Path
     ) -> None:
-        cookies = tmp_path / "cookies.txt"
-        cookies.write_text("stale")
-        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies_file=cookies)
+        cookies, export = self._session(tmp_path)
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
         worker = build_worker(
             harness, settings, downloader=FakeDownloader(error=AuthExpired("NSFW")), alerts=alerts
         )
@@ -266,39 +272,111 @@ class TestOwnerAlerts:
             harness.queue.submit(make_request(harness))
             await drain(harness.queue)
 
-        alerts_sent = harness.session.calls_of(SendMessage)
-        assert len(alerts_sent) == 1
-        assert alerts_sent[0].chat_id == settings.owner_id
-        assert str(cookies) in alerts_sent[0].text
+        sent = harness.session.calls_of(SendMessage)
+        assert len(sent) == 1
+        assert sent[0].chat_id == settings.owner_id
+        # The owner is told which file to replace, not the bot's scratch copy.
+        assert str(export) in sent[0].text
         # The person who asked is told something useful, but not the details.
         assert texts.AUTH_EXPIRED in edited_texts(harness)
 
     async def test_the_owner_is_not_told_twice_about_the_same_dead_session(
         self, harness: BotHarness, settings: Settings, tmp_path: Path
     ) -> None:
-        cookies = tmp_path / "cookies.txt"
-        cookies.write_text("stale")
-        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies_file=cookies)
+        cookies, _ = self._session(tmp_path)
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
 
         await alerts.auth_expired("NSFW")
         await alerts.auth_expired("NSFW")
 
         assert len(harness.session.calls_of(SendMessage)) == 1
 
-    async def test_replacing_the_cookie_file_re_arms_the_alert(
+    async def test_downloading_does_not_count_as_the_owner_replacing_the_export(
         self, harness: BotHarness, settings: Settings, tmp_path: Path
     ) -> None:
-        cookies = tmp_path / "cookies.txt"
-        cookies.write_text("stale")
-        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies_file=cookies)
+        # yt-dlp rewrites the cookie file it is given after every run. If the
+        # alert deduped on that file, every private tweet would look like a new
+        # session and the owner would be spammed once per link.
+        cookies, _ = self._session(tmp_path)
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
         await alerts.auth_expired("NSFW")
 
-        # A fresh export: same path, new mtime.
-        stat = cookies.stat()
-        cookies.write_text("fresh")
-        import os
+        working = cookies.path_for_download()
+        assert working is not None
+        working.write_text("rewritten by yt-dlp")
+        await alerts.auth_expired("NSFW")
 
-        os.utime(cookies, (stat.st_atime + 10, stat.st_mtime + 10))
+        assert len(harness.session.calls_of(SendMessage)) == 1
+
+    async def test_replacing_the_export_re_arms_the_alert(
+        self, harness: BotHarness, settings: Settings, tmp_path: Path
+    ) -> None:
+        cookies, export = self._session(tmp_path)
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
+        await alerts.auth_expired("NSFW")
+
+        export.write_text("a genuinely fresh export")
         await alerts.auth_expired("NSFW")
 
         assert len(harness.session.calls_of(SendMessage)) == 2
+
+    async def test_an_alert_that_never_sent_is_not_counted_as_delivered(
+        self, harness: BotHarness, settings: Settings, tmp_path: Path
+    ) -> None:
+        # Losing this one signal to a flap of the proxy would leave the owner
+        # permanently unaware that their session is dead.
+        cookies, _ = self._session(tmp_path)
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
+        harness.session.fail_on["SendMessage"] = TelegramNetworkError(
+            method=SendMessage(chat_id=1, text="x"), message="proxy is down"
+        )
+
+        await alerts.auth_expired("NSFW")
+        harness.session.fail_on.clear()
+        await alerts.auth_expired("NSFW")
+
+        assert len(harness.session.calls_of(SendMessage)) == 2
+
+
+class TestTheWorkerCannotDieQuietly:
+    """It is the only consumer: if it stops, the bot accepts links forever and
+    downloads nothing, while the watchdog still reports perfect health."""
+
+    async def test_a_telegram_front_end_serving_html_does_not_end_the_worker(
+        self, harness: BotHarness, settings: Settings
+    ) -> None:
+        # ClientDecodeError is an AiogramError but NOT a TelegramAPIError, so
+        # every `except TelegramAPIError` in the request path lets it through.
+        harness.session.fail_on["EditMessageText"] = ClientDecodeError(
+            message="not JSON", original=ValueError("boom"), data="<html>502 Bad Gateway</html>"
+        )
+        downloader = FakeDownloader()
+        worker = build_worker(harness, settings, downloader=downloader)
+
+        async with running(worker) as task:
+            harness.queue.submit(make_request(harness))
+            await drain(harness.queue)
+            harness.session.fail_on.clear()
+            harness.queue.submit(make_request(harness))
+            await drain(harness.queue)
+
+            assert not task.done()
+        # Both requests were actually worked on, not just accepted.
+        assert len(downloader.destinations) == 2
+
+    async def test_a_reporter_that_cannot_speak_at_all_still_frees_the_slot(
+        self, harness: BotHarness, settings: Settings
+    ) -> None:
+        harness.session.fail_on["EditMessageText"] = ClientDecodeError(
+            message="not JSON", original=ValueError("boom"), data="<html>502</html>"
+        )
+        harness.session.fail_on["DeleteMessage"] = ClientDecodeError(
+            message="not JSON", original=ValueError("boom"), data="<html>502</html>"
+        )
+        worker = build_worker(harness, settings)
+
+        async with running(worker):
+            harness.queue.submit(make_request(harness))
+            await drain(harness.queue)
+
+        assert harness.queue.load == 0

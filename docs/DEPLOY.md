@@ -56,12 +56,23 @@ install -m 600 -o twitterdl cookies.txt /usr/local/etc/twitter-dl-cookies.txt
 Обязательный минимум в env-файле: `TELEGRAM_BOT_TOKEN`, `OWNER_ID`,
 `TELEGRAM_PROXY=http://127.0.0.1:1080`, `COOKIES_FILE`, `RCLONE_CONFIG`.
 
-Проверить, что бот дотянется до шары под своим пользователем:
+### rclone-конфиг: собственная копия, а не общая
+
+Конфиг роли `backup` (`/usr/local/etc/backup/rclone.conf`) боту недоступен: сам каталог открыт
+только root'у, а ослаблять права бессмысленно — их вернёт следующий прогон ansible. Секретов в
+файле нет (доступ к шаре гостевой), поэтому бот получает свою копию:
 
 ```sh
-su -m twitterdl -c 'rclone --config /usr/local/etc/backup/rclone.conf lsd keenetic:'
-su -m twitterdl -c 'rclone --config /usr/local/etc/backup/rclone.conf mkdir keenetic:KeeneticShared/twitter-dl'
+install -m 600 -o twitterdl -g twitterdl \
+    /usr/local/etc/backup/rclone.conf /usr/local/etc/twitter-dl-rclone.conf
+
+# Проверка доступа и создание каталога на шаре
+su -m twitterdl -c 'rclone --config /usr/local/etc/twitter-dl-rclone.conf lsd keenetic:'
+su -m twitterdl -c 'rclone --config /usr/local/etc/twitter-dl-rclone.conf mkdir keenetic:KeeneticShared/twitter-dl'
 ```
+
+Если хост шары или имя когда-нибудь поменяются, копию придётся обновить руками — она намеренно
+живёт вне ansible.
 
 ## rc.d
 

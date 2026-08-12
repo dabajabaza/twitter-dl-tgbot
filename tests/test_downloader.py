@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from yt_dlp.extractor.common import InfoExtractor
 from yt_dlp.utils import DownloadError
 
 from twitter_dl.errors import (
@@ -16,24 +17,35 @@ from twitter_dl.errors import (
 )
 from twitter_dl.services import downloader as module
 
+LOGIN_HINT = InfoExtractor._login_hint(InfoExtractor)
+
 TWEET = "https://x.com/someone/status/1234567890"
 
 
+# The exact sentences the X extractor raises, read out of its source rather
+# than imagined: a taxonomy tested against invented strings certifies nothing.
 @pytest.mark.parametrize(
     ("message", "expected"),
     [
-        ("NSFW tweet requires authentication", AuthExpired),
-        ("Requested content is not available, please log in", AuthExpired),
-        ("This tweet is age-restricted", AuthExpired),
-        ("Your cookies are no longer valid", AuthExpired),
+        # raise_login_required() in the extractor, plus the boilerplate hint
+        # yt-dlp appends to every login-required error.
+        (f"NSFW tweet requires authentication. {LOGIN_HINT}", AuthExpired),
+        (f"This video is only available for registered users. {LOGIN_HINT}", AuthExpired),
+        # Same shape, but the account state is what blocks us — no credential
+        # of ours would help, so this must NOT read as expired cookies.
+        (f"You are not authorized to view this protected tweet. {LOGIN_HINT}", TweetUnavailable),
+        ("This account is suspended", TweetUnavailable),
+        ("Broadcast no longer exists", TweetUnavailable),
+        ("Twitter Space not found", TweetUnavailable),
+        # raise_no_formats() / restriction to X extractors.
+        ("No video could be found in this tweet", NoVideoInTweet),
+        ("Media #1 is not a video", NoVideoInTweet),
+        ("No suitable extractor found for URL https://youtube.com/watch?v=x", NoVideoInTweet),
+        ("Video #1 is unavailable", TweetUnavailable),
+        # Transport, not content.
         ("Unable to download API page: <urlopen error proxy>", NetworkUnavailable),
         ("Connection refused", NetworkUnavailable),
         ("The read operation timed out", NetworkUnavailable),
-        ("No video could be found in this tweet", NoVideoInTweet),
-        ("Unsupported URL: https://x.com/someone", NoVideoInTweet),
-        ("This account is suspended", TweetUnavailable),
-        ("Tweet does not exist", TweetUnavailable),
-        ("This account's Tweets are protected", TweetUnavailable),
         ("Some brand new failure mode", DownloadFailed),
     ],
 )
@@ -43,11 +55,14 @@ def test_every_failure_is_sorted_into_a_class_the_worker_answers_for(
     assert isinstance(module._classify(DownloadError(message)), expected)
 
 
-def test_authentication_wins_over_availability_when_a_message_says_both() -> None:
-    # An expired session usually presents as "not available" as well; treating
-    # it as a missing tweet would leave the owner unaware their cookies died.
-    error = DownloadError("Requested content is not available. Log in to see it.")
-    assert isinstance(module._classify(error), AuthExpired)
+def test_the_cookie_boilerplate_alone_never_means_our_session_died() -> None:
+    # The hint contains both "authenticat" and "cookies", so matching on the
+    # raw message made every login-required error look like expired cookies —
+    # and woke the owner over tweets no session of theirs could ever open.
+    assert "authenticat" in LOGIN_HINT.lower()
+    assert "cookies" in LOGIN_HINT.lower()
+    stripped = module._strip_login_hint(f"This account is suspended. {LOGIN_HINT}")
+    assert "cookies" not in stripped.lower()
 
 
 class TestProgress:
@@ -126,3 +141,60 @@ class TestClipsFromInfo:
         clips = module._clips_from_info(self._entry(video, upload_date=None), TWEET)
 
         assert clips[0].upload_date == date.today()
+
+
+class TestStayingOnX:
+    """A tweet is the only thing this bot is allowed to download."""
+
+    def test_only_x_extractors_are_enabled(self, tmp_path: Path) -> None:
+        # A tweet with no media but an outbound link makes the extractor follow
+        # that link. Without this restriction the bot would fetch a stranger's
+        # video through the owner's proxy and file it on the share as theirs.
+        options = module.YtDlpDownloader()._options(tmp_path, lambda status: None)
+
+        from yt_dlp import YoutubeDL
+
+        with YoutubeDL({**options, "logger": None}) as ydl:
+            names = {ie.IE_NAME for ie in ydl._ies.values()}
+        assert names and all(name.startswith("twitter") for name in names)
+
+    def test_a_link_off_x_is_reported_as_a_tweet_without_video(self) -> None:
+        error = DownloadError("ERROR: No suitable extractor found for URL https://youtube.com/x")
+        assert isinstance(module._classify(error), NoVideoInTweet)
+
+
+class TestCookiesAreACopy:
+    def test_the_working_copy_is_what_yt_dlp_is_pointed_at(self, tmp_path: Path) -> None:
+        from twitter_dl.services.cookies import CookieSession
+
+        export = tmp_path / "cookies.txt"
+        export.write_text("netscape")
+        cookies = CookieSession(export, workdir=tmp_path / "work")
+
+        options = module.YtDlpDownloader(cookies=cookies)._options(tmp_path, lambda s: None)
+
+        assert options["cookiefile"] != str(export)
+        assert Path(options["cookiefile"]).read_text() == "netscape"
+
+    def test_without_cookies_the_option_is_absent_rather_than_empty(self, tmp_path: Path) -> None:
+        options = module.YtDlpDownloader()._options(tmp_path, lambda s: None)
+        assert "cookiefile" not in options
+
+
+class TestTweetIdentity:
+    def test_the_id_from_the_link_wins_over_the_id_of_the_media(self, tmp_path: Path) -> None:
+        # The extractor puts the media object's id in `id` and the tweet's own
+        # id in `display_id`. Names on the share are looked up from the link.
+        video = tmp_path / "a.mp4"
+        video.write_bytes(b"x")
+        entry = {
+            "id": "1575559336759263233",  # media
+            "display_id": "1575560063510810624",  # the tweet
+            "uploader_id": "someone",
+            "upload_date": "20260813",
+            "requested_downloads": [{"filepath": str(video)}],
+        }
+
+        clips = module._clips_from_info(entry, TWEET)
+
+        assert clips[0].tweet_id == "1575560063510810624"

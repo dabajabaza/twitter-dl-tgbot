@@ -13,6 +13,11 @@ dependencies = [
     # Imported directly (services/links.py resolves t.co redirects), so it is a
     # declared dependency rather than something inherited from aiogram.
     "aiohttp>=3.14.3",
+    # aiogram builds a proxied connector through this package and imports it
+    # lazily, so without it AiohttpSession(proxy=…) raises at construction —
+    # before any retry logic, on every start, in the one configuration
+    # production actually uses (see docs/ARCHITECTURE.md D6).
+    "aiohttp-socks>=0.10.1",
     "pydantic-settings>=2.14.2",
     # The one dependency that ages in days, not months: X breaks its internal
     # API and the fix lands on PyPI the same day. See docs/ARCHITECTURE.md D2.

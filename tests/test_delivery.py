@@ -160,3 +160,57 @@ class TestShareName:
         clip = make_clip(tmp_path, uploader="../../etc/passwd")
         name = share_name(clip)
         assert "/" not in name and ".." not in name
+
+
+class TestFailuresThatMustNotLookGeneric:
+    async def test_a_missing_rclone_is_reported_as_a_share_problem(
+        self, harness: BotHarness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The likeliest first failure on a fresh server: rclone absent from the
+        # supervisor's PATH. It must not surface as the generic "download
+        # failed", which sends the operator looking in the wrong place.
+        async def missing(*argv: str, **kwargs: Any) -> FakeProcess:
+            raise FileNotFoundError(2, "No such file or directory", "rclone")
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", missing)
+        clip = make_clip(tmp_path, size_bytes=2 * 1024 * 1024)
+
+        with pytest.raises(ShareUnavailable, match="rclone"):
+            await build_delivery(harness, max_chat_mb=1).deliver(clip, chat_id=42, caption="x")
+
+
+class TestUploadDetails:
+    async def test_an_overlong_caption_does_not_cost_a_downloaded_clip(
+        self, harness: BotHarness, tmp_path: Path
+    ) -> None:
+        # Tweet URLs carry arbitrarily long tracking tails, aiogram does not
+        # check the length, and Telegram answers 400 — losing a clip that
+        # downloaded perfectly well.
+        clip = make_clip(tmp_path, size_bytes=1024)
+        caption = "https://x.com/a/status/1?ref=" + "z" * 2000
+
+        await build_delivery(harness).deliver(clip, chat_id=42, caption=caption)
+
+        sent = harness.session.calls_of(SendVideo)[0]
+        assert sent.caption is not None
+        assert len(sent.caption) <= 1024
+
+    async def test_uploads_get_their_own_generous_timeout(
+        self, harness: BotHarness, tmp_path: Path
+    ) -> None:
+        # The session-wide default is 15s, which tens of megabytes through a
+        # proxy will never meet.
+        clip = make_clip(tmp_path, size_bytes=1024)
+
+        await build_delivery(harness).deliver(clip, chat_id=42, caption="x")
+
+        assert harness.session.timeout_of(SendVideo) == 600
+
+    async def test_the_copy_leaves_no_partial_file_on_a_share_nobody_prunes(
+        self, harness: BotHarness, tmp_path: Path, rclone_calls: list[list[str]]
+    ) -> None:
+        clip = make_clip(tmp_path, size_bytes=2 * 1024 * 1024)
+
+        await build_delivery(harness, max_chat_mb=1).deliver(clip, chat_id=42, caption="x")
+
+        assert "--inplace" in rclone_calls[0]

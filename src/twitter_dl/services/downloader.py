@@ -12,6 +12,7 @@ import asyncio
 import logging
 import re
 import shutil
+import threading
 from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
@@ -28,15 +29,40 @@ from twitter_dl.errors import (
     NoVideoInTweet,
     TweetUnavailable,
 )
+from twitter_dl.services.cookies import CookieSession
 
 logger = logging.getLogger(__name__)
 
-# Substrings X and yt-dlp actually produce, grouped by what the operator should
-# do about them. Matched case-insensitively against the whole exception text.
-# Order matters: the first group that matches wins, and auth is checked first
-# because an expired session often presents as "not available" too.
+# Only X. A tweet with no media but an outbound link makes yt-dlp follow that
+# link (`url_result(expanded_url…)` in the extractor) and download whatever
+# lives there — so a link to an article would come back as somebody else's
+# video, captioned with the tweet and filed on the share under their name.
+_ALLOWED_EXTRACTORS = ["twitter.*"]
+
+# yt-dlp appends a generic "how to pass cookies" hint to *every* login-required
+# error. That hint alone contains the words that otherwise mean "our session was
+# rejected", so it is cut off before anything is matched — otherwise a protected
+# account nobody could see would read as expired cookies.
+_LOGIN_HINT_MARKERS = ("use --cookies", "--cookies-from-browser")
+
+# The account or tweet is in a state no credential would change. Checked before
+# the auth markers, because X phrases these as authorization failures too:
+# "You are not authorized to view this protected tweet" is not our session's
+# fault, and waking the owner over it would devalue the one alert that matters.
+_ACCOUNT_STATE_MARKERS = (
+    "protected",
+    "suspended",
+    "deleted",
+    "no longer exists",
+    "does not exist",
+    "doesn't exist",
+    "not found",
+)
+# Our session specifically was not accepted.
 _AUTH_MARKERS = (
     "nsfw",
+    "requires authentication",
+    "only available for registered users",
     "log in",
     "login",
     "sign in",
@@ -48,23 +74,17 @@ _AUTH_MARKERS = (
     "age-restricted",
     "age restricted",
 )
-_UNAVAILABLE_MARKERS = (
-    "no longer exists",
-    "does not exist",
-    "not found",
-    "unavailable",
-    "suspended",
-    "protected",
-    "deleted",
-    "private",
-)
 _NO_VIDEO_MARKERS = (
     "no video could be found",
     "no video",
-    "there's no video",
+    "is not a video",
     "no media",
     "unsupported url",
+    # What the extractor restriction above produces when a tweet's only media
+    # lives on someone else's site.
+    "no suitable extractor",
 )
+_UNAVAILABLE_MARKERS = ("unavailable", "private")
 _NETWORK_MARKERS = (
     "proxy",
     "connection refused",
@@ -79,16 +99,20 @@ _NETWORK_MARKERS = (
 )
 
 
+class _Abandoned(Exception):
+    """Raised inside the worker thread to unwind yt-dlp after a request is dropped."""
+
+
 class YtDlpDownloader:
     """Downloads every clip of a tweet at the best quality available."""
 
     def __init__(
         self,
         *,
-        cookies_file: Path | None = None,
+        cookies: CookieSession | None = None,
         proxy: str | None = None,
     ) -> None:
-        self._cookies_file = cookies_file
+        self._cookies = cookies
         self._proxy = proxy
 
     async def download(
@@ -101,8 +125,11 @@ class YtDlpDownloader:
         loop, so callers may touch the Bot API from ``on_progress`` safely.
         """
         loop = asyncio.get_running_loop()
+        abandoned = threading.Event()
 
         def hook(status: dict[str, Any]) -> None:
+            if abandoned.is_set():
+                raise _Abandoned
             if on_progress is None:
                 return
             text = _format_progress(status)
@@ -110,14 +137,37 @@ class YtDlpDownloader:
                 loop.call_soon_threadsafe(on_progress, text)
 
         try:
-            info = await asyncio.to_thread(self._extract, url, dest, hook)
+            info = await asyncio.to_thread(self._extract, url, dest, hook, abandoned)
+        except asyncio.CancelledError:
+            # A running thread cannot be cancelled: `to_thread`'s future is
+            # already RUNNING, so cancel() returns False and yt-dlp keeps
+            # downloading long after the request was abandoned — holding the
+            # uplink, and blocking shutdown on the executor join. Raising from
+            # the next progress callback is the one way in: the thread unwinds
+            # itself within a chunk or two.
+            abandoned.set()
+            raise
         except (DownloadError, ExtractorError) as exc:
             raise _classify(exc) from exc
         return _clips_from_info(info, url)
 
-    def _extract(self, url: str, dest: Path, hook: Callable[[dict[str, Any]], None]) -> Any:
-        with YoutubeDL(self._options(dest, hook)) as ydl:
-            return ydl.extract_info(url, download=True)
+    def _extract(
+        self,
+        url: str,
+        dest: Path,
+        hook: Callable[[dict[str, Any]], None],
+        abandoned: threading.Event,
+    ) -> Any:
+        try:
+            with YoutubeDL(self._options(dest, hook)) as ydl:
+                return ydl.extract_info(url, download=True)
+        except Exception:
+            # Whatever yt-dlp wrapped our _Abandoned in, the request is already
+            # gone and nobody is waiting for this result.
+            if abandoned.is_set():
+                logger.info("abandoned download of %s unwound in its thread", url)
+                return None
+            raise
 
     def _options(self, dest: Path, hook: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
         options: dict[str, Any] = {
@@ -128,6 +178,7 @@ class YtDlpDownloader:
             "merge_output_format": "mp4",
             "outtmpl": {"default": "%(id)s.%(ext)s"},
             "paths": {"home": str(dest)},
+            "allowed_extractors": _ALLOWED_EXTRACTORS,
             # A tweet holding several videos is a playlist to yt-dlp, and all of
             # them are wanted.
             "noplaylist": False,
@@ -140,8 +191,11 @@ class YtDlpDownloader:
             "socket_timeout": 30,
             "retries": 3,
         }
-        if self._cookies_file is not None:
-            options["cookiefile"] = str(self._cookies_file)
+        # A working copy, never the owner's export: yt-dlp rewrites this file on
+        # every run (see services/cookies.py).
+        cookiefile = self._cookies.path_for_download() if self._cookies else None
+        if cookiefile is not None:
+            options["cookiefile"] = str(cookiefile)
         if self._proxy is not None:
             options["proxy"] = self._proxy
         return options
@@ -184,10 +238,21 @@ def _clip_from_entry(entry: dict[str, Any], url: str) -> Clip | None:
         return None
     return Clip(
         path=path,
-        tweet_id=str(entry.get("id") or "unknown"),
+        tweet_id=_tweet_id(entry),
         uploader=str(entry.get("uploader_id") or entry.get("uploader") or "unknown"),
         upload_date=_upload_date(entry),
     )
+
+
+def _tweet_id(entry: dict[str, Any]) -> str:
+    """The id from the link, not the id of the media inside it.
+
+    The X extractor puts the media object's id in `id` and the tweet's own id in
+    `display_id`. Names on the share are the share's only index (see
+    ARCHITECTURE.md D7), and an index you cannot look up from the original link
+    is not an index.
+    """
+    return str(entry.get("display_id") or entry.get("id") or "unknown")
 
 
 def _downloaded_path(entry: dict[str, Any]) -> Path | None:
@@ -210,18 +275,36 @@ def _upload_date(entry: dict[str, Any]) -> date:
     return date.today()
 
 
+def _strip_login_hint(text: str) -> str:
+    """Drop yt-dlp's boilerplate advice about passing cookies.
+
+    It is appended to every login-required error and says nothing about *this*
+    failure, but it does contain the words the auth markers look for.
+    """
+    lowered = text.lower()
+    for marker in _LOGIN_HINT_MARKERS:
+        index = lowered.find(marker)
+        if index != -1:
+            text = text[:index]
+            lowered = text.lower()
+    return text
+
+
 def _classify(exc: Exception) -> Exception:
     """Map yt-dlp's one exception type onto the failure taxonomy."""
-    text = str(exc).lower()
-    if any(marker in text for marker in _AUTH_MARKERS):
-        return AuthExpired(str(exc))
+    detail = str(exc)
+    text = _strip_login_hint(detail).lower()
     if any(marker in text for marker in _NETWORK_MARKERS):
-        return NetworkUnavailable(str(exc))
+        return NetworkUnavailable(detail)
+    if any(marker in text for marker in _ACCOUNT_STATE_MARKERS):
+        return TweetUnavailable(detail)
+    if any(marker in text for marker in _AUTH_MARKERS):
+        return AuthExpired(detail)
     if any(marker in text for marker in _NO_VIDEO_MARKERS):
-        return NoVideoInTweet(str(exc))
+        return NoVideoInTweet(detail)
     if any(marker in text for marker in _UNAVAILABLE_MARKERS):
-        return TweetUnavailable(str(exc))
-    return DownloadFailed(str(exc))
+        return TweetUnavailable(detail)
+    return DownloadFailed(detail)
 
 
 class _YtdlpLogger:

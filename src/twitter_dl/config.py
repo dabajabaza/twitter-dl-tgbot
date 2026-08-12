@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -105,6 +105,20 @@ class Settings(BaseSettings):
         ),
     )
 
+    @field_validator("cookies_file", "rclone_config", mode="before")
+    @classmethod
+    def _empty_path_means_unset(cls, value: object) -> object:
+        """An empty value is "not configured", not the current directory.
+
+        `.env.example` invites `NAME=` for optional settings, and pydantic turns
+        an empty string into `Path('.')` for a `Path | None` field. That start
+        succeeds and then fails on every single download, with yt-dlp trying to
+        read cookies out of a directory.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @property
     def allowed_ids(self) -> frozenset[int]:
         """The whitelist: ALLOWED_IDS plus the owner, who can never lock themselves out."""
@@ -137,6 +151,8 @@ class Settings(BaseSettings):
             raise ValueError(f"QUEUE_LIMIT must be >= 1, got {self.queue_limit}")
         if self.download_timeout_s < 1:
             raise ValueError(f"DOWNLOAD_TIMEOUT_S must be >= 1, got {self.download_timeout_s}")
+        if self.cookies_file is not None and self.cookies_file.is_dir():
+            raise ValueError(f"COOKIES_FILE must be a file, got directory {self.cookies_file}")
         if self.max_tg_video_mb < 1:
             raise ValueError(f"MAX_TG_VIDEO_MB must be >= 1, got {self.max_tg_video_mb}")
         return self

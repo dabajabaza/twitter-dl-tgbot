@@ -45,8 +45,9 @@ async def test_a_burst_of_progress_becomes_one_edit_not_a_hundred(harness: BotHa
     await asyncio.sleep(0.05)
 
     # yt-dlp reports many times a second; Telegram would start rejecting edits
-    # long before that, so only the first of the burst may land.
-    assert len(edits(harness)) <= 1
+    # long before that, so exactly one of the burst may land — and one must,
+    # otherwise the user watches a message that never moves.
+    assert len(edits(harness)) == 1
     await reporter.close()
 
 
@@ -110,3 +111,47 @@ async def test_a_status_message_that_cannot_be_edited_never_fails_the_request(
     reporter = build_reporter(harness)
 
     await reporter.set("Downloading…")  # must not raise
+
+
+class TestAVerdictIsFinal:
+    """A download abandoned on timeout keeps calling back for a while."""
+
+    async def test_progress_arriving_after_the_verdict_cannot_overwrite_it(
+        self,
+        harness: BotHarness,
+    ) -> None:
+        reporter = build_reporter(harness, min_interval=0.01)
+        await reporter.finish("Gave up after 30 minutes.")
+
+        # The zombie download thread, still unwinding, reports one more time.
+        reporter.offer("Downloading… 63%")
+        await asyncio.sleep(0.1)
+
+        assert edits(harness)[-1] == "Gave up after 30 minutes."
+
+    async def test_a_closed_reporter_stays_closed(self, harness: BotHarness) -> None:
+        reporter = build_reporter(harness, min_interval=0.01)
+        await reporter.close()
+
+        await reporter.set("Downloading…")
+        reporter.offer("10%")
+        await asyncio.sleep(0.05)
+
+        assert reporter.closed
+        assert edits(harness) == []
+
+    async def test_a_failure_that_is_not_a_telegram_api_error_is_still_swallowed(
+        self,
+        harness: BotHarness,
+    ) -> None:
+        # Telegram's front end answering with an HTML error page raises
+        # ClientDecodeError, which is NOT a TelegramAPIError. Letting it out of
+        # here would kill the only queue consumer over a transient 502.
+        from aiogram.exceptions import ClientDecodeError
+
+        harness.session.fail_on["EditMessageText"] = ClientDecodeError(
+            message="not JSON", original=ValueError("boom"), data="<html>502</html>"
+        )
+        reporter = build_reporter(harness)
+
+        await reporter.set("Downloading…")  # must not raise

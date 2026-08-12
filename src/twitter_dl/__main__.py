@@ -5,6 +5,7 @@ import contextlib
 import fcntl
 import logging
 import os
+import signal
 import socket
 import sys
 import time
@@ -23,9 +24,11 @@ from aiogram.types import BotCommand, ErrorEvent
 from twitter_dl.bot import texts
 from twitter_dl.bot.handlers import fallback, links, start
 from twitter_dl.bot.middlewares import AuthMiddleware, PrivateChatOnlyMiddleware
+from twitter_dl.bot.storage import NoStorage
 from twitter_dl.config import Settings
 from twitter_dl.runtime.watchdog import run_watchdog, sd_notify
 from twitter_dl.runtime.worker import OwnerAlerts, RequestQueue, RequestWorker
+from twitter_dl.services.cookies import CookieSession
 from twitter_dl.services.delivery import ClipDelivery
 from twitter_dl.services.downloader import YtDlpDownloader, ffmpeg_available
 
@@ -65,7 +68,11 @@ def build_dispatcher(settings: Settings, queue: RequestQueue) -> Dispatcher:
     below *is* the access policy, and a test that assembled its own dispatcher
     would be testing a different bot.
     """
-    dp = Dispatcher()
+    # NoStorage, not the default MemoryStorage: aiogram resolves an FSM context
+    # before any middleware registered here can run, so with a storage that
+    # remembers keys, every stranger who messages the bot leaves a record behind
+    # despite being refused. There are no dialogs to store anyway.
+    dp = Dispatcher(storage=NoStorage())
     # Workflow data: aiogram hands these to any handler declaring a parameter of
     # the same name. With no database there is nothing request-scoped to build,
     # so a DI container would be ceremony around two singletons.
@@ -174,9 +181,10 @@ async def _run_bot(settings: Settings) -> None:
     bot = Bot(token=settings.bot_token, session=session)
 
     queue = RequestQueue(settings.queue_limit)
+    cookies = CookieSession(settings.cookies_file, workdir=settings.download_dir)
     worker = RequestWorker(
         queue=queue,
-        downloader=YtDlpDownloader(cookies_file=settings.cookies_file, proxy=settings.ytdlp_proxy),
+        downloader=YtDlpDownloader(cookies=cookies, proxy=settings.ytdlp_proxy),
         delivery=ClipDelivery(
             bot,
             max_chat_bytes=settings.max_tg_video_bytes,
@@ -185,7 +193,7 @@ async def _run_bot(settings: Settings) -> None:
             rclone_remote=settings.rclone_remote,
             share_path_prefix=settings.share_path_prefix,
         ),
-        alerts=OwnerAlerts(bot, owner_id=settings.owner_id, cookies_file=settings.cookies_file),
+        alerts=OwnerAlerts(bot, owner_id=settings.owner_id, cookies=cookies),
         settings=settings,
     )
     dp = build_dispatcher(settings, queue)
@@ -201,14 +209,26 @@ async def _run_bot(settings: Settings) -> None:
     # Telegram answered, so readiness is now an honest claim.
     sd_notify("READY=1")
     worker_task = asyncio.create_task(worker.run())
+    worker_task.add_done_callback(_worker_died)
     watchdog_task = asyncio.create_task(
         run_watchdog(bot, interval=_WATCHDOG_INTERVAL_S, probe_timeout=_WATCHDOG_PROBE_TIMEOUT_S)
     )
     try:
         # Only messages are used; asking for anything else would have Telegram
         # queue updates nobody reads.
-        await dp.start_polling(bot, allowed_updates=["message"], polling_timeout=_POLLING_TIMEOUT_S)
+        #
+        # close_bot_session=False: aiogram's own finally closes the session
+        # before start_polling returns, which would tear the connector out from
+        # under an upload still finishing in the worker. We close it below,
+        # after the worker has actually stopped.
+        await dp.start_polling(
+            bot,
+            allowed_updates=["message"],
+            polling_timeout=_POLLING_TIMEOUT_S,
+            close_bot_session=False,
+        )
     finally:
+        worker_task.remove_done_callback(_worker_died)
         worker_task.cancel()
         watchdog_task.cancel()
         # Awaited rather than fired and forgotten: cancel() only schedules the
@@ -216,6 +236,29 @@ async def _run_bot(settings: Settings) -> None:
         # turns a clean shutdown into a traceback.
         await asyncio.gather(worker_task, watchdog_task, return_exceptions=True)
         await bot.session.close()
+
+
+def _worker_died(task: asyncio.Task[None]) -> None:
+    """Turn a dead queue consumer into a dead process.
+
+    The worker is the only thing that downloads anything. If it ever stops on
+    its own, the bot keeps answering "Queued…" forever while nothing happens —
+    and the watchdog keeps reporting health, because Telegram is still
+    reachable. A crash the supervisor can see and restart is far better than a
+    bot that looks alive and does nothing.
+    """
+    if task.cancelled():
+        return
+    exception = task.exception()
+    if exception is None:
+        logger.error("request worker stopped on its own — exiting so the supervisor restarts us")
+    else:
+        logger.critical(
+            "request worker died: %r — exiting so the supervisor restarts us", exception
+        )
+    # SIGTERM rather than sys.exit(): this runs inside a callback on the loop,
+    # where raising would only be logged as "exception in callback".
+    os.kill(os.getpid(), signal.SIGTERM)
 
 
 def main() -> None:

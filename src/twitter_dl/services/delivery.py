@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 # Uploading tens of megabytes through the proxy takes far longer than a normal
 # API call, so this overrides the session-wide request timeout for that one call.
 _UPLOAD_TIMEOUT_S = 600
+# Bot API ceiling for a media caption, which aiogram does not enforce itself.
+_CAPTION_LIMIT = 1024
 # Dots are excluded along with the obvious separators: the metadata comes from
 # X by way of yt-dlp, and a handle of "../.." must not be able to say anything
 # about a path once it is pasted after the remote's name.
@@ -77,7 +79,7 @@ class ClipDelivery:
             await self._bot.send_video(
                 chat_id=chat_id,
                 video=FSInputFile(clip.path),
-                caption=caption,
+                caption=_fit_caption(caption),
                 supports_streaming=True,
                 request_timeout=_UPLOAD_TIMEOUT_S,
             )
@@ -93,11 +95,28 @@ class ClipDelivery:
             argv += ["--config", str(self._rclone_config)]
         # copyto rather than copy: the destination is a full file path, and the
         # name on the share is ours, not the scratch file's.
-        argv += ["--no-traverse", "copyto", str(source), f"{self._rclone_remote}/{name}"]
+        # --inplace: without it rclone writes "<name>.partial" and renames on
+        # completion, so a copy killed on timeout leaves hundreds of megabytes
+        # of rubbish on a share that has no retention policy at all.
+        argv += [
+            "--no-traverse",
+            "--inplace",
+            "copyto",
+            str(source),
+            f"{self._rclone_remote}/{name}",
+        ]
 
-        process = await asyncio.create_subprocess_exec(
-            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+        except OSError as exc:
+            # rclone missing from the supervisor's PATH, or RCLONE_BINARY
+            # mistyped — the likeliest first failure on a fresh server. Without
+            # this it surfaces as the generic "download failed" instead of the
+            # share-specific answer that says where to look.
+            logger.error("could not run %s: %s", self._rclone_binary, exc)
+            raise ShareUnavailable(f"cannot run {self._rclone_binary}: {exc}") from exc
         try:
             _, stderr = await process.communicate()
         except asyncio.CancelledError:
@@ -111,6 +130,18 @@ class ClipDelivery:
             message = stderr.decode("utf-8", errors="replace").strip()
             logger.error("rclone failed (%s): %s", process.returncode, message)
             raise ShareUnavailable(message or f"rclone exited with {process.returncode}")
+
+
+def _fit_caption(caption: str) -> str:
+    """Keep the caption inside the Bot API's limit.
+
+    aiogram does not check the length, so an over-long one comes back as a 400
+    and loses a clip that downloaded perfectly well — and tweet URLs carry
+    arbitrarily long tracking tails.
+    """
+    if len(caption) <= _CAPTION_LIMIT:
+        return caption
+    return caption[: _CAPTION_LIMIT - 1] + "…"
 
 
 def share_name(clip: Clip, *, index: int = 1, total: int = 1) -> str:
