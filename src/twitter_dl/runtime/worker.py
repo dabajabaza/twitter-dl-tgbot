@@ -205,7 +205,14 @@ class RequestWorker:
                 clips = await self._downloader.download(
                     url, scratch, on_progress=_progress_into(request.reporter)
                 )
-                await self._deliver(request, url, clips)
+                shares = await self._deliver(request, url, clips)
+            # Outside the deadline on purpose. It exists to bound the *work*,
+            # and by here the work is done — the clips are delivered. Leaving
+            # the verdict inside meant a deadline expiring during that last
+            # edit cancelled the edit itself, freezing the status message on
+            # "Uploading…" forever. On the share route that lost the only copy
+            # of the path, which is the share's only index (D7).
+            await self._announce(request, shares)
         except TimeoutError:
             minutes = self._settings.download_timeout_s // 60
             logger.warning("request for %s timed out after %s min", request.url, minutes)
@@ -227,7 +234,8 @@ class RequestWorker:
             return url
         return await resolve_short_link(url, proxy=self._settings.ytdlp_proxy)
 
-    async def _deliver(self, request: Request, url: str, clips: list[Clip]) -> None:
+    async def _deliver(self, request: Request, url: str, clips: list[Clip]) -> list[ShareDelivery]:
+        """Send every clip where it belongs; report which ones went to the share."""
         total = len(clips)
         shares: list[ShareDelivery] = []
         for index, clip in enumerate(clips, start=1):
@@ -237,20 +245,23 @@ class RequestWorker:
             )
             if isinstance(result, ShareDelivery):
                 shares.append(result)
+        return shares
 
-        if shares:
-            await request.reporter.finish(
-                "\n\n".join(
-                    texts.SHARE_RESULT.format(
-                        size=texts.human_size(share.size_bytes), path=share.display_path
-                    )
-                    for share in shares
-                )
-            )
-        else:
+    async def _announce(self, request: Request, shares: list[ShareDelivery]) -> None:
+        """The request's last word, once the clips are already delivered."""
+        if not shares:
             # Every clip made it into the chat, so the status message has
             # nothing left to say and the videos speak for themselves.
             await request.reporter.replace_with_upload()
+            return
+        await request.reporter.finish(
+            "\n\n".join(
+                texts.SHARE_RESULT.format(
+                    size=texts.human_size(share.size_bytes), path=share.display_path
+                )
+                for share in shares
+            )
+        )
 
 
 def _delivery_status(clip: Clip, settings: Settings, index: int, total: int) -> str:

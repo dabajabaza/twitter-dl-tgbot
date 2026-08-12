@@ -409,3 +409,36 @@ class TestTheWorkerCannotDieQuietly:
             await drain(harness.queue)
 
         assert harness.queue.load == 0
+
+
+class TestTheDeadlineBoundsWorkNotTheVerdict:
+    """The timeout exists to stop a download that will not end, not to
+    interrupt the sentence that reports one that already did."""
+
+    async def test_a_deadline_expiring_during_the_final_edit_still_leaves_a_verdict(
+        self, harness: BotHarness, tmp_path: Path
+    ) -> None:
+        # The clip is delivered; only the closing status update is left. If
+        # that update runs under the deadline, its cancellation freezes the
+        # message on "Uploading…" forever — and on the share route takes the
+        # path with it, which is the share's only index.
+        settings = build_settings(tmp_path, download_timeout_s=1)
+        worker = build_worker(harness, settings, downloader=FakeDownloader(delay=0.8))
+
+        reporter = SlowFinishReporter(harness.bot, chat_id=OWNER_ID, message_id=777)
+        request = Request(url=TWEET, chat_id=OWNER_ID, user_id=OWNER_ID, reporter=reporter)
+
+        async with running(worker):
+            harness.queue.submit(request)
+            await drain(harness.queue, timeout=5.0)
+
+        assert harness.session.calls_of(DeleteMessage)
+        assert not any(text.startswith("Gave up") for text in edited_texts(harness))
+
+
+class SlowFinishReporter(ProgressReporter):
+    """A reporter whose closing update takes long enough to cross a deadline."""
+
+    async def replace_with_upload(self) -> None:
+        await asyncio.sleep(0.4)
+        await super().replace_with_upload()

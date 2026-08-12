@@ -258,7 +258,10 @@ class TestShortLinkResolution:
         with pytest.raises(NotATweetLink):
             await resolve_short_link("https://t.co/AbC123")
 
-        assert len(http.requested) <= 5
+        # The literal, not _MAX_REDIRECTS: comparing the code against itself
+        # would let a quietly lowered limit pass, and a loop that gave up after
+        # one hop would stop resolving legitimate multi-hop t.co chains.
+        assert len(http.requested) == 5
 
     async def test_an_interstitial_that_leads_nowhere_useful_is_reported(
         self, monkeypatch: pytest.MonkeyPatch
