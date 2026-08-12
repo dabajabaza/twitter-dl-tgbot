@@ -1,0 +1,60 @@
+[project]
+name = "twitter-dl"
+description = "Personal Telegram bot that downloads videos from X/Twitter posts"
+requires-python = ">=3.12"
+version = "0.1.0"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "Carbon-Based Lifeform", email = "sdrv87@gmail.com" }
+]
+dependencies = [
+    "aiogram>=3.30.0",
+    # Imported directly (services/links.py resolves t.co redirects), so it is a
+    # declared dependency rather than something inherited from aiogram.
+    "aiohttp>=3.14.3",
+    "pydantic-settings>=2.14.2",
+    # The one dependency that ages in days, not months: X breaks its internal
+    # API and the fix lands on PyPI the same day. See docs/ARCHITECTURE.md D2.
+    "yt-dlp>=2025.10.22",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.0",
+    "pre-commit>=4.6.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/twitter_dl"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+check_untyped_defs = true
+
+# yt-dlp ships no type information, and stubs for it do not exist.
+[[tool.mypy.overrides]]
+module = ["yt_dlp.*"]
+ignore_missing_imports = true
