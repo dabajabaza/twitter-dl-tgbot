@@ -6,7 +6,7 @@ on:
     branches: [main]
     tags: ['v*']
 
-# Один активный прогон на ссылку: новый пуш отменяет предыдущий.
+# One active run per ref: a new push cancels the previous one.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -15,11 +15,11 @@ env:
   GITLEAKS_VERSION: 8.30.1
 
 jobs:
-  # Имя job'а — это имя статус-чека, на которое ссылается ruleset ветки main и
-  # которое сервер проверяет перед выкаткой тега (анонимным запросом к
-  # check-runs API). Менять его нельзя, не поправив ruleset: защита молча
-  # перестанет требовать зелёный CI, а деплой перестанет находить чек и не
-  # выкатит ни одного тега.
+  # The job's name IS the status check name that the main branch ruleset refers
+  # to, and that the server looks for before deploying a tag (an anonymous call
+  # to the check-runs API). It cannot be changed without updating the ruleset:
+  # the protection would quietly stop requiring a green CI, and the deploy would
+  # stop finding the check and never roll out another tag.
   ci:
     name: ci
     runs-on: ubuntu-latest
@@ -27,10 +27,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # gitleaks смотрит всю историю, а не только последний коммит
+          # gitleaks looks at the whole history, not just the last commit
           fetch-depth: 0
 
-      - name: Поиск секретов
+      - name: Scan for secrets
         run: |
           mkdir -p "$RUNNER_TEMP/gitleaks"
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
@@ -38,34 +38,36 @@ jobs:
           "$RUNNER_TEMP/gitleaks/gitleaks" detect \
             --source . --log-opts=--all --no-banner --redact
 
-      # Точная версия, а не major-тег: setup-uv публикует подвижные теги только
-      # до v7, хотя релизы дошли до 9.0.0. Ссылка @v9 не разрешается, и job
-      # падает ещё на «Set up job», не дойдя ни до одного шага.
+      # An exact version rather than a major tag: setup-uv publishes moving tags
+      # only up to v7, although its releases have reached 9.0.0. A @v9 reference
+      # does not resolve, and the job fails during "Set up job" without reaching
+      # a single step.
       - uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
 
-      - name: Зависимости строго по локу
+      - name: Install dependencies strictly from the lock file
         run: uv sync --locked
 
-      # На сервере uv нет: там зависимости ставятся pip'ом из requirements.txt,
-      # который порождается из uv.lock. Если файл забыть перегенерировать, деплой
-      # поставит не то, что проверял CI, — и разойдётся молча. Регенерируем той же
-      # командой и требуем отсутствия диффа (команда попадает в шапку файла,
-      # поэтому экспорт во временный путь дал бы ложное расхождение).
-      - name: requirements.txt не разошёлся с uv.lock
+      # The server has no uv: there, dependencies are installed with pip from
+      # requirements.txt, which is generated from uv.lock. Forgetting to
+      # regenerate it would have the deploy install something CI never checked,
+      # and the two would diverge silently. Regenerate with the same command and
+      # require no diff (the command is written into the file's header, so
+      # exporting to a temporary path would produce a false mismatch).
+      - name: requirements.txt still matches uv.lock
         run: |
           uv export --format requirements-txt --no-hashes --no-dev -o requirements.txt
           git diff --exit-code -- requirements.txt
 
-      - name: Линтер
+      - name: Lint
         run: uv run ruff check .
 
-      - name: Форматирование
+      - name: Formatting
         run: uv run ruff format --check .
 
-      - name: Типы
+      - name: Types
         run: uv run mypy src tests
 
-      - name: Тесты
+      - name: Tests
         run: uv run pytest -q

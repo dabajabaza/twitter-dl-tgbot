@@ -1,7 +1,8 @@
 repos:
-  # Репозиторий публичный (иначе сервер не увидит статус-чек через анонимный
-  # GitHub API), поэтому утёкший секрет придётся отзывать, а не прятать.
-  # detect-private-key берёт только PEM/SSH-блоки; токены и куки — gitleaks.
+  # The repository is public (otherwise the server cannot see the status check
+  # through the anonymous GitHub API), so a leaked secret has to be revoked
+  # rather than hidden. detect-private-key only covers PEM/SSH blocks; tokens
+  # and cookies are gitleaks' job.
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
     hooks:

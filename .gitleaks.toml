@@ -1,38 +1,39 @@
-# Расширяем дефолтный набор gitleaks, а не подменяем его.
+# Extends gitleaks' default rule set rather than replacing it.
 [extend]
 useDefault = true
 
-# Зачем это правило.
-# Штатное telegram-bot-api-token завязано на ключевое слово "telegram" рядом с
-# секретом. Здесь токен лежит в TELEGRAM_BOT_TOKEN именно поэтому — стоковое
-# правило его поймает. Но окружение бота задаётся не только этим репозиторием
-# (env-файл на сервере, шпаргалки в README), а переименование переменной в
-# будущем не должно тихо открывать дыру: ловим ещё и по самому виду токена —
-# 8-10 цифр, двоеточие, 35 символов base64url.
+# Why this rule exists.
+# The stock telegram-bot-api-token rule is gated on the word "telegram" sitting
+# next to the secret. The token lives in TELEGRAM_BOT_TOKEN precisely so that
+# rule catches it — but the bot's environment is not defined by this repository
+# alone (an env file on the server, notes in the README), and renaming the
+# variable later must not quietly open a hole. So the token is also caught by
+# its shape: 8-10 digits, a colon, 35 base64url characters.
 [[rules]]
 id = "telegram-bot-token-anywhere"
-description = "Telegram bot token (без привязки к ключевому слову)"
+description = "Telegram bot token (not gated on a keyword)"
 regex = '''\b[0-9]{8,10}:[A-Za-z0-9_-]{35}\b'''
 tags = ["telegram", "token"]
 
-  # Форма именно [[rules.allowlists]] (массив), а не устаревшая [rules.allowlist]:
-  # одиночная в v8 молча игнорируется.
+  # The array form [[rules.allowlists]], not the deprecated singular
+  # [rules.allowlist]: v8 ignores the latter silently.
   #
-  # Критерии внутри ОДНОГО блока складываются через И, поэтому путь и regex
-  # разнесены по разным блокам — иначе исключение срабатывало бы только для
-  # файла, который подходит под оба условия сразу.
+  # Criteria inside ONE block are ANDed, which is why the path and the regex
+  # live in separate blocks — together they would only exempt a file matching
+  # both conditions at once.
   [[rules.allowlists]]
-  description = "Сам этот конфиг, чтобы правило не ругалось на свои же примеры"
+  description = "This config itself, so the rule does not flag its own examples"
   paths = ['''\.gitleaks\.toml$''']
 
   [[rules.allowlists]]
-  description = "Заведомо фальшивый токен из тестовой обвязки"
+  description = "The obviously fake token used by the test harness"
   regexes = ['''123456:A{35}''']
 
-# Куки X — второй секрет проекта, и он в репозиторий попасть не должен вообще.
-# Ловим характерную пару cookie-имён из выгрузки cookies.txt.
+# X cookies are the project's other secret, and they must never reach the
+# repository at all. Caught by the characteristic pair of cookie names from a
+# cookies.txt export.
 [[rules]]
 id = "x-cookie-session"
-description = "Cookie-сессия X (auth_token / ct0) из cookies.txt"
+description = "X cookie session (auth_token / ct0) from cookies.txt"
 regex = '''(?i)\b(auth_token|ct0)\b\s+[0-9a-f]{32,}'''
 tags = ["x", "twitter", "cookie"]

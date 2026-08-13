@@ -4,23 +4,24 @@
 # REQUIRE: NETWORKING
 # KEYWORD: shutdown
 #
-# Телеграм-бот twitter-dl. Включение:
+# The twitter-dl Telegram bot. Enable with:
 #   sysrc twitter_dl_enable=YES
 #
-# Установка (роль bot_deploy шаблонов не рендерит — только зовёт service):
+# Installation (the bot_deploy role renders no templates — it only calls
+# `service`):
 #   cp deploy/rc.d/twitter_dl /usr/local/etc/rc.d/twitter_dl && chmod 755 ...
-# Источник правды — репозиторий, см. docs/ARCHITECTURE.md D13.
+# The repository is the source of truth; see docs/ARCHITECTURE.md D13.
 #
-# Слои перезапуска (каждый лечит свою болезнь):
-#   daemon -r            → умер сам супервизор
-#   sdnotify-supervise   → бот упал ИЛИ завис (перестал слать WATCHDOG=1)
-#   код бота             → Telegram/прокси недоступны на старте: ждёт с backoff
-#                          до 10 минут, не выходит. Поэтому порядок старта с
-#                          sing-box не важен.
+# Layers of restart, each curing its own ailment:
+#   daemon -r            -> the supervisor itself died
+#   sdnotify-supervise   -> the bot crashed OR hung (stopped sending WATCHDOG=1)
+#   the bot's own code   -> Telegram/proxy unreachable at startup: it waits with
+#                           backoff for up to ten minutes instead of exiting, so
+#                           its start order relative to sing-box does not matter.
 #
-# Привилегии: daemon и супервизор идут от root, а бота супервизор запускает уже
-# от twitter_dl_runas. Через `daemon -u` не выйдет: он разжалует и сам
-# супервизор, и повторные рестарты падают на initgroups.
+# Privileges: daemon and the supervisor run as root, and the supervisor drops
+# the bot itself to twitter_dl_runas. `daemon -u` will not do: it would demote
+# the supervisor too, and repeated restarts then fail on initgroups.
 
 . /etc/rc.subr
 
@@ -35,8 +36,8 @@ load_rc_config $name
 : ${twitter_dl_home:="/home/twitterdl"}
 : ${twitter_dl_envfile:="/usr/local/etc/twitter-dl.env"}
 
-# watchdog-sec заметно больше периода пробы бота (30 с, см. __main__.py):
-# одна медленная проба не должна читаться как зависание.
+# watchdog-sec is comfortably larger than the bot's own probe interval (30s, see
+# __main__.py): one slow probe must not read as a hang.
 command=/usr/sbin/daemon
 command_args="-r -S -T ${name} -P ${pidfile} \
 	/usr/local/sbin/sdnotify-supervise \
@@ -51,18 +52,19 @@ start_precmd=twitter_dl_prestart
 
 twitter_dl_prestart()
 {
-	# Секреты и настройки лежат отдельным файлом (0600, читает только бот).
-	# set -a — чтобы всё прочитанное ушло в окружение дочернего процесса.
+	# Secrets and settings live in a separate file (0600, readable by the bot
+	# only). `set -a` is what puts everything read from it into the child
+	# process's environment.
 	if [ -r "${twitter_dl_envfile}" ]; then
 		set -a
 		. "${twitter_dl_envfile}"
 		set +a
 	else
-		warn "нет ${twitter_dl_envfile} — бот не получит токен"
+		warn "no ${twitter_dl_envfile} — the bot would get no token"
 		return 1
 	fi
-	# Файл блокировки «одна копия»: на FreeBSD используется flock, а не
-	# абстрактный сокет (его тут нет).
+	# The single-instance lock file: on FreeBSD the guard uses flock rather
+	# than an abstract socket, which does not exist here.
 	LOCK_FILE="${twitter_dl_home}/twitter-dl.lock"
 	export LOCK_FILE
 }

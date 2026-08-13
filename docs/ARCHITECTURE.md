@@ -1,320 +1,380 @@
-# Архитектурные решения
+# Architectural decisions
 
-Формат: **Контекст → Решение → Последствия → Когда пересматривать**. Номера стабильны и никогда
-не перенумеровываются — на них ссылаются комментарии в коде (`см. ARCHITECTURE.md D7`).
+Format: **Context → Decision → Consequences → Revisit when**. The numbers are
+stable and are never renumbered — code comments refer to them
+(`see ARCHITECTURE.md D7`).
 
-Один файл вместо `docs/adr/NNNN-*.md`: для проекта на одного человека `git log -p
-docs/ARCHITECTURE.md` даёт историю бесплатно, а один файл остаётся грепаемым.
+One file instead of `docs/adr/NNNN-*.md`: for a one-person project
+`git log -p docs/ARCHITECTURE.md` gives the history for free, and a single file
+stays greppable.
 
-Словарь терминов (Owner, Guest, Clip, Share, Cookie session…) — в [CONTEXT.md](../CONTEXT.md).
-
----
-
-## D1. Список допущенных живёт в переменной окружения, а не в базе
-
-**Контекст.** Соседние боты (`chain-health`, `lesson-tracker`) держат пользователей в SQLite:
-там есть регистрация, инвайты, роли. Здесь пользователей двое-трое, и все они — люди, которых
-владелец знает лично.
-
-**Решение.** `OWNER_ID` плюс `ALLOWED_IDS` (список через запятую). Владелец добавляется в список
-автоматически и не может случайно запереть себя снаружи. Никакого флоу самозаписи не существует:
-чтобы добавить человека, владелец правит env-файл и перезапускает бота.
-
-**Последствия.** Нет базы, нет миграций, нет инвайт-кодов и их протухания. Изменение состава
-требует доступа к серверу — что для «личного бота на личных кредах» скорее свойство, чем
-недостаток: каждый лишний пользователь тратит аккаунт X владельца.
-
-**Пересмотреть, если** пользователей станет больше десятка или появится смысл в самозаписи.
+The vocabulary (Owner, Guest, Clip, Share, Cookie session…) is in
+[CONTEXT.md](../CONTEXT.md).
 
 ---
 
-## D2. yt-dlp — зависимость проекта, а не системный пакет
+## D1. The guest list lives in an environment variable, not a database
 
-**Контекст.** yt-dlp — единственная зависимость, которая стареет за дни: X ломает свой внутренний
-API, и фикс выходит на PyPI в тот же день. В портах FreeBSD лаг доходит до месяцев, а квартальная
-ветка отстаёт ещё сильнее.
+**Context.** The neighbouring bots (`chain-health`, `lesson-tracker`) keep users
+in SQLite, with sign-up, invites and roles. Here there are two or three users,
+and all of them are people the owner knows personally.
 
-**Решение.** `yt-dlp` в `pyproject.toml`, версия зафиксирована в `uv.lock`, ставится pip'ом в venv
-бота вместе с остальными зависимостями. Используется как **библиотека** (`import yt_dlp`), не как
-подпроцесс.
+**Decision.** `OWNER_ID` plus `ALLOWED_IDS` (a comma-separated list). The owner
+is added to the list automatically and cannot accidentally lock themselves out.
+There is no sign-up flow at all: to add someone, the owner edits the env file
+and restarts the bot.
 
-**Последствия.** Обновление — осознанный акт (`uv lock --upgrade-package yt-dlp` + новый тег), а
-не побочный эффект `pkg upgrade` в несвязанный момент. Откат релиза откатывает и yt-dlp, потому
-что venv лежит внутри `releases/<tag>/`. Как библиотека он даёт прогресс-хуки и исключения вместо
-парсинга stdout — на этом стоят D8 (прогресс) и таксономия ошибок (`errors.py`).
+**Consequences.** No database, no migrations, no invite codes and no expiry for
+them. Changing the roster requires access to the server — which, for "a personal
+bot on personal credentials", is a feature rather than a shortcoming: every
+extra user spends the owner's X account.
 
-**Пересмотреть, если** появится причина держать один экземпляр yt-dlp на несколько потребителей
-в джейле.
-
----
-
-## D3. Права даёт cookies.txt владельца, протухание ловится реактивно
-
-**Контекст.** Публичные твиты качаются и без авторизации, но NSFW, возрастные ограничения и
-закрытые аккаунты — нет. Логин по паролю yt-dlp давно не поддерживает (сломан на стороне X),
-официальный API платный и видео не отдаёт.
-
-**Решение.** Netscape-формат `cookies.txt`, выгруженный из браузера, лежит на сервере
-(`/usr/local/etc/twitter-dl-cookies.txt`, 0600) и передаётся yt-dlp на каждый запрос. Протухание
-детектируется по ошибке скачивания (`AuthExpired` в таксономии), а не проверяется заранее.
-
-**Последствия.** Никакого фонового трафика под куками ради проверки, которая устареет через час.
-Расплата — узнаём о протухании на первом же приватном твите, а не заранее.
-
-**Выгрузка владельца — вход только для чтения.** yt-dlp переписывает файл кук, который ему
-отдали, после *каждого* запуска (`YoutubeDL.__exit__` → `save_cookies()`), успешного или нет, и
-делает это на месте — open+truncate, без temp+rename. Поэтому оригинал не трогается никогда, а
-каждый запрос получает **свою** одноразовую копию внутри собственного scratch-каталога
-(`services/cookies.py`). Копия именно на запрос, а не одна общая: брошенное по таймауту
-скачивание доживает ещё какое-то время и на выходе переписывает свой файл кук — с общим файлом
-эта запись попадала бы ровно в момент, когда его читает следующий запрос, и тот выглядел бы
-неавторизованным (ложный алерт владельцу, да ещё и глушащий будущий настоящий).
-
-На идентичности оригинала держится дедупликация уведомления (`OwnerAlerts` — один сигнал на одну
-выгрузку, замена файла взводит его заново). Считай мы по файлу, который бот сам же переписывает,
-— владелец получал бы алерт на каждый приватный твит. Считать по «успешным скачиваниям» тоже
-нельзя: публичные твиты продолжают качаться с мёртвой сессией, из-за чего поломку и легко не
-заметить. Нечитаемый оригинал (владелец как раз меняет файл) трактуется как «та же сессия», а не
-как новая, — иначе дубликат прилетал бы ровно в момент замены.
-
-Флаг «уже уведомили» ставится **после** успешной отправки. Иначе один моргнувший прокси в момент
-отправки навсегда съедал бы единственный сигнал, ради которого всё это и делается.
-
-**Остаточный риск, принятый сознательно.** Закрытый аккаунт, на который владелец подписан, при
-мёртвых куках отвечает тем же текстом, что и чужой закрытый аккаунт («not authorized to view this
-protected tweet»), — различить их по сообщению нельзя. Такой случай уедет в `TweetUnavailable`, и
-владельца не разбудят. Выбор в пользу редкого пропуска против частого ложного срабатывания: алерт
-ценен ровно настолько, насколько ему верят. Если окажется, что закрытые аккаунты — основной
-сценарий использования, понадобится эвристика (например, будить, когда подряд N приватных твитов
-дали отказ при непустых куках).
-
-**Пересмотреть, если** куки начнут протухать чаще раза в месяц — тогда имеет смысл проактивная
-проверка или автоматическое обновление сессии.
+**Revisit when** there are more than a dozen users, or self-service sign-up
+starts to make sense.
 
 ---
 
-## D4. Чужим — молчание, а не отказ
+## D2. yt-dlp is a project dependency, not a system package
 
-**Контекст.** Юзернеймы ботов перебираются краулерами. Любой ответ — включая вежливое «вам
-нельзя» — подтверждает, что бот существует и жив.
+**Context.** yt-dlp is the one dependency that ages in days: X breaks its
+internal API and the fix reaches PyPI the same day. In the FreeBSD ports the lag
+runs to months, and the quarterly branch trails further still.
 
-**Решение.** `AuthMiddleware` возвращает `None` без единого вызова Bot API. Отказ пишется в лог:
-первый раз для каждого id на WARNING, повторы на DEBUG, не больше 256 отслеживаемых id.
+**Decision.** `yt-dlp` in `pyproject.toml`, pinned in `uv.lock`, installed with
+pip into the bot's venv along with everything else. Used as a **library**
+(`import yt_dlp`), not as a subprocess.
 
-**Последствия.** Владелец видит в логе, что бота нашли, но краулер не видит ничего. Гейт стоит
-внешним middleware на `update` — до фильтров, так что сообщение чужого не доходит даже до
-разбора на ссылки.
+**Consequences.** Updating is a deliberate act (`uv lock --upgrade-package
+yt-dlp` plus a new tag) rather than a side effect of a `pkg upgrade` at some
+unrelated moment. Rolling a release back rolls yt-dlp back with it, because the
+venv lives inside `releases/<tag>/`. As a library it provides progress hooks and
+typed exceptions instead of stdout to parse — which is what D8 (progress) and
+the failure taxonomy (`errors.py`) are built on.
 
-**Пересмотреть, если** бот когда-нибудь станет публичным (тогда всё это решение отменяется).
-
----
-
-## D5. Очередь ограничена пятью запросами, считая тот, что в работе
-
-**Контекст.** Переслать в бота пост из канала с десятком ссылок — дело одной секунды, а качать
-их сервер будет полчаса.
-
-**Решение.** `RequestQueue` с лимитом 5. Лимит считает и запрос, который уже качается: «пять» —
-это пять в системе, а не пять сверх работающего. Шестая ссылка отбивается сообщением, а не
-молча теряется. Остальные ссылки того же сообщения после отказа не обрабатываются — повторять
-отказ на каждую значит спамить.
-
-**Последствия.** Очередь живёт в памяти и теряется при рестарте (см. D9). Позиция в очереди
-показывается только когда она больше единицы — иначе это лишний вызов Bot API на каждый запрос.
+**Revisit when** there is a reason to keep one yt-dlp for several consumers in
+the jail.
 
 ---
 
-## D6. Весь внешний трафик идёт через хостовый sing-box
+## D3. The owner's cookies.txt grants the rights; expiry is detected reactively
 
-**Контекст.** И Telegram, и X недоступны напрямую. На хосте сервера уже работает sing-box
-(SOCKS/HTTP на `127.0.0.1:1080`, VLESS наружу), джейл `bots` унаследовал сетевой стек хоста
-(`ip4 = inherit`), и соседние боты ходят ровно так же.
+**Context.** Public tweets download without any authentication, but NSFW,
+age-gated content and protected accounts do not. yt-dlp dropped password login
+long ago (broken on X's side), and the official API costs money and does not
+hand over video anyway.
 
-**Решение.** `TELEGRAM_PROXY=http://127.0.0.1:1080` для aiogram и тот же адрес для yt-dlp
-(`YTDLP_PROXY` по умолчанию берётся из `TELEGRAM_PROXY` — это один и тот же хоп).
+**Decision.** A Netscape-format `cookies.txt` exported from a browser sits on
+the server (`/usr/local/etc/twitter-dl-cookies.txt`, 0600) and is handed to
+yt-dlp for every request. Expiry is detected from a download failure
+(`AuthExpired` in the taxonomy) rather than checked ahead of time.
 
-**Последствия.** Выходной IP совпадает с тем, через который владелец сидит в X из браузера, — с
-точки зрения X куки и адрес консистентны. Второго экземпляра прокси в джейле не нужно. Если
-sing-box лёг, бот отвечает «Can't reach X right now» и не виснет: ошибки прокси попадают в класс
-`NetworkUnavailable`.
+**Consequences.** No background traffic under the cookies for a check that would
+be stale an hour later. The price is learning about expiry on the first private
+tweet rather than in advance.
 
----
+**The owner's export is read-only input.** yt-dlp rewrites the cookie file it is
+handed after *every* run (`YoutubeDL.__exit__` → `save_cookies()`), successful or
+not, and does so in place — open plus truncate, no temp-and-rename. So the
+original is never touched, and every request gets **its own** throwaway copy
+inside its own scratch directory (`services/cookies.py`). Per request rather
+than one shared file, because a download abandoned on timeout lives on for a
+moment and rewrites its cookie file on the way out — with a shared file that
+write would land exactly while the next request is reading it, and that request
+would look unauthenticated (a false alert to the owner, and one that muffles the
+next real one).
 
-## D7. Размер решает, куда уедет клип
+Deduplication of the alert rests on the identity of the original (`OwnerAlerts`
+— one signal per export, replacing the file re-arms it). Keying on a file the
+bot itself rewrites would send the owner an alert per private tweet. Counting
+"successful downloads" is no good either: public tweets keep downloading with a
+dead session, which is exactly why the breakage is easy to miss. An unreadable
+original (the owner is replacing it right now) counts as "the same session"
+rather than a new one — otherwise a duplicate would arrive at the very moment of
+the swap.
 
-**Контекст.** Bot API не даёт боту загрузить файл больше 50 МБ. Твиты Premium-аккаунтов бывают
-часовыми. Поднимать локальный Bot API сервер (лимит 2 ГБ) — это ещё один демон на старом ноутбуке
-ради редкого случая.
+The "already notified" flag is set **after** a successful send. Otherwise one
+flap of the proxy at the wrong moment would permanently swallow the single
+signal the whole arrangement exists for.
 
-**Решение.** Всегда качаем лучшее качество. Клип до потолка уходит в чат подписью-ссылкой на
-твит. Клип сверх потолка `rclone` копирует на SMB-шару роутера, а в чат приходит человекочитаемый
-путь. Ответ одинаков для всех: различать «свои в локалке» и «гость снаружи» не стоит кода —
-случай редкий, а честный ответ лучше тихой деградации качества.
+**A residual risk, accepted deliberately.** A protected account the owner
+follows answers, with dead cookies, in exactly the same words as a stranger's
+protected account ("not authorized to view this protected tweet") — the two
+cannot be told apart from the message. Such a case lands in `TweetUnavailable`
+and the owner is not woken. The choice favours a rare miss over a frequent false
+alarm: an alert is worth exactly as much as it is believed. If protected
+accounts turn out to be the main use case, a heuristic will be needed (waking
+the owner after N consecutive private tweets refused while the cookies are
+non-empty, say).
 
-**Последствия.** Имя файла на шаре (`<дата>-<автор>-<id>.mp4`) — единственный её индекс:
-ретеншена нет, листинга нет. Отсюда сортируемость по дате и грепаемость по автору. Метаданные
-приходят от X, поэтому имя санируется жёстко: всё, кроме букв, цифр, `_` и `-`, схлопывается —
-включая точки, чтобы «`../..`» в имени аккаунта ничего не значило после подстановки в путь.
-
-**Пересмотреть, если** большие видео станут частым случаем — тогда локальный Bot API сервер.
-
----
-
-## D8. Один воркер, последовательно, с потолком в 30 минут
-
-**Контекст.** Канал наружу один (VLESS), процессор — старый ноутбучный. Параллельные скачивания
-не закончатся быстрее: они поделят ту же полосу.
-
-**Решение.** Один потребитель очереди. На запрос — `asyncio.timeout(1800)`, покрывающий и
-скачивание, и доставку. Прогресс показывается в одном редактируемом сообщении, правки не чаще
-раза в 5 секунд.
-
-**Последствия.** Время ожидания предсказуемо и его можно назвать («2-й в очереди»). Троттлинг
-обязателен: yt-dlp зовёт прогресс-хук десятки раз в секунду, Telegram начинает отбивать правки
-задолго до этого. Хук приходит из рабочего потока (`asyncio.to_thread`), поэтому downloader
-маршалит его обратно в цикл через `call_soon_threadsafe` — вызывающий код про потоки не думает.
-
-**Брошенный по таймауту поток надо ещё и остановить.** `asyncio.to_thread` не отменяется: future
-уже в состоянии RUNNING, `cancel()` возвращает False, и yt-dlp продолжает качать в фоне — занимая
-канал у следующего запроса и подвешивая остановку процесса на join executor'а (до 300 с, то есть
-`service twitter_dl restart` на выкатке). Единственный вход внутрь — прогресс-хук: при отмене
-downloader взводит флаг, и ближайший же вызов хука бросает исключение, разматывая поток.
-
-**Вердикт окончателен.** `ProgressReporter` после `finish()`/`close()` переходит в терминальное
-состояние: `set`/`offer` становятся no-op. Без этого хук ещё живого зомби-потока через пять
-секунд затирал бы «Gave up after 30 minutes» строкой «Downloading… 63%», и статус врал бы до
-конца жизни потока.
-
-**Дедлайн ограничивает работу, а не рассказ о ней.** Финальное обновление статуса (`_announce`)
-вынесено за пределы `asyncio.timeout`: к этому моменту клипы уже доставлены, работа сделана, и
-отменять тут нечего. Пока оно было внутри, истечение дедлайна ровно на этой последней правке
-отменяло саму правку — сообщение навсегда застывало на «Uploading…», а на ветке шары вместе с ним
-терялся путь к файлу, то есть единственный индекс шары (D7). Инвариант «статус всегда доходит до
-финального состояния» проверяется тестом, который падает, если вернуть вердикт под дедлайн.
+**Revisit when** cookies start expiring more often than once a month — then a
+proactive check or automatic session refresh earns its keep.
 
 ---
 
-## D9. Состояния нет вообще — ни базы, ни файла
+## D4. Strangers get silence, not a refusal
 
-**Контекст.** У соседей есть SQLite, alembic, двухслойный бэкап. Смотреть, что из этого нужно
-здесь: список пользователей статичен (D1), очередь эфемерна, история запросов никому не нужна.
+**Context.** Bot usernames get enumerated by crawlers. Any answer — including a
+polite "you may not" — confirms that the bot exists and is alive.
 
-**Решение.** Никакой базы. Состояние процесса — только очередь в памяти и флаг «владельцу уже
-сказали про куки». FSM-хранилище aiogram тоже пустышка (`bot/storage.py`): диалогов нет, а
-дефолтный `MemoryStorage` заводил бы запись на каждого написавшего — включая чужих, потому что
-aiogram резолвит FSM-контекст в middleware, зарегистрированном в конструкторе `Dispatcher`, то
-есть **раньше** любых наших гейтов. Это был неограниченный рост памяти, управляемый теми, кому
-бот вообще не отвечает.
+**Decision.** `AuthMiddleware` returns `None` without a single Bot API call. The
+refusal goes to the log: WARNING the first time for each id, DEBUG for repeats,
+with at most 256 ids tracked.
 
-**Последствия.** Рестарт всегда чистый, мигрировать нечего, в роль бэкапа добавлять нечего
-(`backup_dumps` не трогается, sanoid и так снапшотит датасет джейла). Расплата — рестарт теряет
-очередь; это принято сознательно: «пришли ссылку заново» дешевле, чем персистентная очередь с
-восстановлением.
+**Consequences.** The owner can see in the log that the bot was found, while the
+crawler sees nothing. The gate is an outer middleware on `update`, ahead of the
+filters, so a stranger's message never even reaches link parsing.
 
-**Пересмотреть, если** понадобится статистика или дедупликация «уже качал этот твит».
+**Revisit when** the bot ever becomes public (at which point this whole decision
+is void).
 
 ---
 
-## D10. Ответы — по-английски и простым текстом
+## D5. The queue is capped at five requests, counting the one in flight
 
-**Контекст.** Ответы цитируют то, что боту не принадлежит: имена аккаунтов, сообщения yt-dlp,
-windows-пути с обратными слэшами.
+**Context.** Forwarding a channel post with a dozen links takes a second; the
+server will spend half an hour downloading them.
 
-**Решение.** Никакого HTML или Markdown parse_mode. Все строки — в `bot/texts.py`, английский.
+**Decision.** `RequestQueue` with a limit of 5. The limit counts the request
+already downloading: "five" means five in the system, not five on top of the one
+being worked on. The sixth link is refused with a message rather than dropped
+silently. The remaining links in that message are not processed after a refusal
+— repeating the refusal per link is just noise.
 
-**Последствия.** Экранировать нечего и сломать разметку нечем. Жирного шрифта нет — UX от этого
-не страдает. Правило проверяется тестом (`test_texts.py`): кириллица в строках — падение сборки.
-
----
-
-## D11. DI-контейнера нет, в отличие от соседей
-
-**Контекст.** У `chain-health` есть dishka, и на ней держится нетривиальная механика: сессия БД
-на запрос, единица работы, схлопывание скоупов (`_collapse_dishka_scopes`).
-
-**Решение.** Здесь нет ни одной request-scoped зависимости, потому что нет базы (D9). Синглтоны
-(`Settings`, `Bot`, `RequestQueue`, downloader, delivery) собираются руками в `__main__._run_bot`,
-а хендлеры получают нужное через workflow-данные aiogram (`dp["queue"]`, `dp["settings"]`).
-
-**Последствия.** Минус зависимость и минус целый класс граблей со скоупами. Швы для тестов
-обеспечены протоколами `Downloader` и `Delivery`, объявленными в `runtime/worker.py` — там, где
-они потребляются.
-
-**Пересмотреть, если** появится состояние на запрос (то есть если отменится D9).
+**Consequences.** The queue lives in memory and is lost on restart (see D9). The
+position in line is shown only when it is greater than one; otherwise it would
+be an extra Bot API call on every request.
 
 ---
 
-## D12. Про yt-dlp знает ровно один файл
+## D6. All outbound traffic goes through the host's sing-box
 
-**Контекст.** Первая версия держала `Clip` в `services/downloader.py`, и любой импорт типа тянул
-за собой yt-dlp — включая воркер, который на самом деле про движок ничего знать не должен.
+**Context.** Neither Telegram nor X is reachable directly. The server's host
+already runs sing-box (SOCKS/HTTP on `127.0.0.1:1080`, VLESS outbound), the
+`bots` jail inherits the host's network stack (`ip4 = inherit`), and the
+neighbouring bots take exactly the same route.
 
-**Решение.** Доменные типы (`Clip`, `ProgressCallback`) живут в `domain.py`, свободном и от
-aiogram, и от yt-dlp. Импортировать `yt_dlp` имеет право только `services/downloader.py`.
+**Decision.** `TELEGRAM_PROXY=http://127.0.0.1:1080` for aiogram, and the same
+address for yt-dlp (`YTDLP_PROXY` defaults to `TELEGRAM_PROXY` — it is the same
+hop).
 
-**Последствия.** Правило проверяемое, и оно проверяется (`test_architecture.py`). Замена движка —
-работа в одном файле; воркер тестируется двойниками без установки yt-dlp.
-
----
-
-## D13. rc.d-скрипт лежит в репозитории
-
-**Контекст.** У обоих соседей rc.d-скрипт живёт только на сервере. В `lesson-tracker` прямо
-записано: «рассинхрон не проявится ни в одном тесте — только в журнале сервера».
-
-**Решение.** `deploy/rc.d/twitter_dl` версионируется здесь, рядом с кодом, который он запускает.
-Установка по-прежнему ручная (ansible-роль `bot_deploy` шаблонов не рендерит), но источник правды
-один, и правка таймаута супервизора видна в истории вместе с изменением кода.
-
-**Последствия.** Копия на сервере может разойтись с репозиторием — это ловится только глазами при
-деплое; зато теперь есть с чем сверять. Порядок установки — в [DEPLOY.md](DEPLOY.md).
+**Consequences.** The exit IP matches the one the owner browses X from, so from
+X's point of view the cookies and the address are consistent. No second proxy
+inside the jail is needed. If sing-box goes down, the bot answers "Can't reach X
+right now" instead of hanging: proxy errors land in the `NetworkUnavailable`
+class.
 
 ---
 
-## D14. Токен лежит в `TELEGRAM_BOT_TOKEN`, а не в `BOT_TOKEN`
+## D7. Size decides where a clip goes
 
-**Контекст.** Стоковое правило gitleaks `telegram-bot-api-token` завязано на слово «telegram»
-рядом с секретом: `TELEGRAM_BOT_TOKEN = "..."` ловится, `BOT_TOKEN = "..."` — уже нет. Соседи
-используют `BOT_TOKEN` и вынуждены компенсировать это кастомным правилом.
+**Context.** The Bot API will not let a bot upload a file larger than 50 MB.
+Tweets from Premium accounts can run for an hour. Standing up a local Bot API
+server (a 2 GB limit) means another daemon on an old laptop for a rare case.
 
-**Решение.** Переменная называется `TELEGRAM_BOT_TOKEN`, и кастомное правило на форму токена
-(8-10 цифр, двоеточие, 35 символов base64url) добавлено всё равно — вместе с правилом на куки X.
+**Decision.** Always download the best quality. A clip under the ceiling goes to
+the chat, captioned with the tweet's link. A clip over it is copied by `rclone`
+to the router's SMB share, and the chat gets a human-readable path. The answer
+is the same for everyone: telling "on the LAN" from "a guest elsewhere" is not
+worth the code — the case is rare, and an honest answer beats silently degrading
+quality.
 
-**Последствия.** Секрет ловится и стоковым правилом, и своим. Имя переменной отличается от
-соседских — это осознанное расхождение, а не недосмотр.
+**Consequences.** The file name on the share (`<date>-<author>-<id>.mp4`) is its
+only index: there is no retention and no listing. Hence sortable by date and
+greppable by author. The metadata comes from X, so the name is sanitised hard:
+everything but letters, digits, `_` and `-` is collapsed — dots included, so
+that a `../..` in an account name means nothing once pasted into a path.
 
----
-
-## D15. yt-dlp разрешено ходить только на X
-
-**Контекст.** Твит без медиа, но с внешней ссылкой, экстрактор twitter обрабатывает как
-`url_result(expanded_url)` — то есть передаёт управление экстрактору того сайта, куда ссылка
-ведёт. yt-dlp по умолчанию умеет 1744 сайта.
-
-**Решение.** `allowed_extractors: ["twitter.*"]` — ровно шесть экстракторов X и ничего больше.
-Внешний URL получает «No suitable extractor found», что таксономия относит к `NoVideoInTweet`.
-
-**Последствия.** Твит-ссылка на ролик с чужого сайта честно отвечает «в твите нет видео» вместо
-того, чтобы прислать это чужое видео с подписью-ссылкой на твит и положить его на шару под
-чужими метаданными. Заодно закрыт выход за пределы X через прокси владельца: раньше автор твита
-(посторонний человек) фактически выбирал, куда сходит бот. Ограничение проверяется тестом.
-
-**Пересмотреть, если** понадобится качать по ссылкам из твитов — но это уже другой продукт.
+**Revisit when** large videos become a common case — then, a local Bot API
+server.
 
 ---
 
-## D16. Смерть воркера должна убивать процесс
+## D8. One worker, sequential, with a thirty-minute ceiling
 
-**Контекст.** Воркер — единственный потребитель очереди. Если он остановится, бот продолжит
-принимать ссылки и отвечать «Queued…», не скачивая ничего; watchdog при этом честно рапортует
-здоровье, потому что Telegram доступен. Снаружи — живой бот, который ничего не делает.
+**Context.** There is one uplink (VLESS) and an old laptop CPU. Parallel
+downloads would not finish sooner: they would share the same pipe.
 
-**Решение.** Два слоя. Первый: воркер не должен уметь умирать — `_say` и `ProgressReporter`
-ловят **любое** исключение, а не только `TelegramAPIError` (aiogram поднимает `ClientDecodeError`,
-который наследник `AiogramError`, но не `TelegramAPIError`, — например когда фронт Telegram
-отдаёт HTML-страницу 502 вместо JSON). Второй: `add_done_callback`, который на любой исход,
-кроме отмены, шлёт процессу SIGTERM — пусть супервизор перезапустит.
+**Decision.** A single queue consumer. Per request, `asyncio.timeout(1800)`
+covering both the download and the delivery. Progress appears in one editable
+message, edited no more than once every five seconds.
 
-**Последствия.** Транзиентный 502 больше не способен тихо обезглавить бота; а если воркер всё же
-кончится по неучтённой причине, это станет видно как рестарт, а не как молчание. Оба слоя
-проверяются тестами.
+**Consequences.** Waiting time is predictable and can be stated ("2nd in line").
+Throttling is mandatory: yt-dlp calls the progress hook dozens of times a
+second, and Telegram starts rejecting edits long before that. The hook arrives
+on a worker thread (`asyncio.to_thread`), so the downloader marshals it back
+onto the loop with `call_soon_threadsafe` — callers never think about threads.
+
+**A thread abandoned on timeout must also be stopped.** `asyncio.to_thread`
+cannot be cancelled: the future is already RUNNING, `cancel()` returns False,
+and yt-dlp keeps downloading in the background — taking the pipe from the next
+request and blocking process shutdown on the executor join (up to 300 s, i.e.
+`service twitter_dl restart` during a deploy). The one way in is the progress
+hook: on cancellation the downloader sets a flag, and the very next hook call
+raises, unwinding the thread.
+
+**A verdict is final.** After `finish()`/`close()` the `ProgressReporter` enters
+a terminal state: `set`/`offer` become no-ops. Without it the hook of a still
+living zombie thread would, five seconds later, overwrite "Gave up after 30
+minutes" with "Downloading… 63%", and the status would lie for the rest of that
+thread's life.
+
+**The deadline bounds the work, not the telling of it.** The final status update
+(`_announce`) was moved outside `asyncio.timeout`: by then the clips are
+delivered, the work is done, and there is nothing left to cancel. While it was
+inside, a deadline expiring on that very last edit cancelled the edit itself —
+the message froze on "Uploading…" forever, and on the share route it took the
+path to the file with it, i.e. the share's only index (D7). The invariant "the
+status always reaches a final state" is covered by a test that fails if the
+verdict is put back under the deadline.
+
+---
+
+## D9. There is no state at all — no database, no file
+
+**Context.** The neighbours have SQLite, alembic and a two-layer backup. Looking
+at what of that is needed here: the user list is static (D1), the queue is
+ephemeral, and nobody needs a history of requests.
+
+**Decision.** No database. The process's state is the in-memory queue and the
+"the owner has already been told about the cookies" flag. aiogram's FSM storage
+is a null object too (`bot/storage.py`): there are no dialogs, and the default
+`MemoryStorage` would create a record for everyone who writes in — strangers
+included, because aiogram resolves the FSM context in a middleware registered
+inside the `Dispatcher` constructor, i.e. **before** any gate of ours. That was
+unbounded memory growth driven by the very people the bot refuses to answer.
+
+**Consequences.** A restart is always clean, there is nothing to migrate, and
+nothing to add to the backup role (`backup_dumps` is left alone; sanoid
+snapshots the jail's dataset anyway). The price is that a restart loses the
+queue; accepted deliberately, since "send the link again" is cheaper than a
+persistent queue with recovery.
+
+**Revisit when** statistics, or "I have already downloaded this tweet"
+deduplication, become necessary.
+
+---
+
+## D10. Replies are English and plain text
+
+**Context.** Replies quote things that do not belong to the bot: account
+handles, yt-dlp messages, Windows paths full of backslashes.
+
+**Decision.** No HTML or Markdown parse mode. Every string lives in
+`bot/texts.py`, in English.
+
+**Consequences.** There is nothing to escape and no markup to break. There is no
+bold text, and the UX does not suffer for it. The rule is enforced by a test
+(`test_texts.py`): Cyrillic in a string fails the build.
+
+---
+
+## D11. There is no DI container, unlike in the neighbouring bots
+
+**Context.** `chain-health` uses dishka, and non-trivial machinery rests on it:
+a database session per request, a unit of work, scope collapsing
+(`_collapse_dishka_scopes`).
+
+**Decision.** Here there is not a single request-scoped dependency, because
+there is no database (D9). The singletons (`Settings`, `Bot`, `RequestQueue`,
+the downloader, the delivery route) are assembled by hand in
+`__main__._run_bot`, and handlers receive what they need through aiogram's
+workflow data (`dp["queue"]`, `dp["settings"]`).
+
+**Consequences.** One dependency fewer, and a whole class of scope traps gone.
+The seams tests need are provided by the `Downloader` and `Delivery` protocols,
+declared in `runtime/worker.py` — where they are consumed.
+
+**Revisit when** per-request state appears (that is, if D9 is ever reversed).
+
+---
+
+## D12. Exactly one file knows about yt-dlp
+
+**Context.** The first version kept `Clip` in `services/downloader.py`, so
+importing the type dragged yt-dlp along with it — including into the worker,
+which has no business knowing about the engine at all.
+
+**Decision.** The domain types (`Clip`, `ProgressCallback`) live in `domain.py`,
+free of both aiogram and yt-dlp. Only `services/downloader.py` may import
+`yt_dlp`.
+
+**Consequences.** The rule is checkable, and it is checked
+(`test_architecture.py`). Replacing the engine is work in one file, and the
+worker is tested with doubles without yt-dlp installed at all.
+
+---
+
+## D13. The rc.d script lives in the repository
+
+**Context.** For both neighbours the rc.d script exists only on the server. In
+`lesson-tracker` it is written down plainly: a drift between the two shows up in
+no test — only in the server's log.
+
+**Decision.** `deploy/rc.d/twitter_dl` is versioned here, next to the code it
+launches. Installation is still manual (the `bot_deploy` ansible role renders no
+templates), but there is a single source of truth, and a change to the
+supervisor's timeout appears in the history alongside the code change.
+
+**Consequences.** The copy on the server can still drift from the repository —
+that is caught only by eye during a deploy; but now there is something to
+compare against. The installation order is in [DEPLOY.md](DEPLOY.md).
+
+---
+
+## D14. The token lives in `TELEGRAM_BOT_TOKEN`, not `BOT_TOKEN`
+
+**Context.** gitleaks' stock `telegram-bot-api-token` rule is gated on the word
+"telegram" next to the secret: `TELEGRAM_BOT_TOKEN = "..."` is caught,
+`BOT_TOKEN = "..."` is not. The neighbours use `BOT_TOKEN` and have to
+compensate with a custom rule.
+
+**Decision.** The variable is called `TELEGRAM_BOT_TOKEN`, and a custom rule
+matching the token's shape (8-10 digits, a colon, 35 base64url characters) is
+added anyway — together with a rule for X cookies.
+
+**Consequences.** The secret is caught by both the stock rule and ours. The
+variable name differs from the neighbours' — a deliberate divergence, not an
+oversight.
+
+---
+
+## D15. yt-dlp is allowed to visit X and nowhere else
+
+**Context.** A tweet with no media but an outbound link is handled by the
+twitter extractor as `url_result(expanded_url)` — that is, it hands control to
+the extractor for whatever site the link points to. Out of the box yt-dlp knows
+1744 sites.
+
+**Decision.** `allowed_extractors: ["twitter.*"]` — exactly six X extractors and
+nothing else. An external URL produces "No suitable extractor found", which the
+taxonomy files under `NoVideoInTweet`.
+
+**Consequences.** A tweet linking to a video on someone else's site honestly
+answers "that tweet has no video in it", instead of delivering that stranger's
+video captioned with the tweet and filing it on the share under their metadata.
+It also closes the path out of X through the owner's proxy: previously the
+author of a tweet — a stranger — effectively chose where the bot would go. The
+restriction is covered by a test.
+
+**Revisit when** downloading from links inside tweets becomes desirable — but
+that is a different product.
+
+---
+
+## D16. The worker's death must kill the process
+
+**Context.** The worker is the only queue consumer. If it stops, the bot goes on
+accepting links and answering "Queued…" while downloading nothing; the watchdog
+meanwhile reports perfect health, because Telegram is reachable. From the
+outside: a live bot that does nothing.
+
+**Decision.** Two layers. First, the worker must not be able to die — `_say` and
+`ProgressReporter` catch **any** exception, not just `TelegramAPIError` (aiogram
+raises `ClientDecodeError`, a descendant of `AiogramError` but not of
+`TelegramAPIError`, for instance when Telegram's front end serves an HTML 502
+page instead of JSON). Second, an `add_done_callback` that, on any outcome other
+than cancellation, sends the process SIGTERM — let the supervisor restart it.
+
+**Consequences.** A transient 502 can no longer quietly behead the bot; and if
+the worker does end for some unforeseen reason, it shows up as a restart rather
+than as silence. Both layers are covered by tests.

@@ -1,49 +1,59 @@
-# Словарь предметной области
+# Domain glossary
 
-Термины, которыми говорят код, логи и ответы бота. Реализационных подробностей здесь нет —
-они в [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The words the code, the logs and the bot's replies all use. No implementation
+details here — those live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Люди
+## People
 
-**Owner** — единственный владелец бота. Его аккаунт X даёт боту права (см. *Cookie session*), и
-только он получает эксплуатационные уведомления. Всегда в списке допущенных, даже если его id
-забыли вписать в `ALLOWED_IDS`.
+**Owner** — the single person who owns the bot. Their X account is what gives it
+any rights at all (see *Cookie session*), and they are the only recipient of
+operational alerts. Always on the guest list, even if their id was left out of
+`ALLOWED_IDS`.
 
-**Guest** — допущенный пользователь, не владелец. Права на скачивание те же, уведомлений не
-получает. Каждый его запрос выполняется от имени аккаунта Owner'а — поэтому гостей единицы.
+**Guest** — an allowed user who is not the Owner. Same download rights, no
+alerts. Every request of theirs runs under the Owner's account — which is why
+there are only ever a handful of them.
 
-**Stranger** — кто угодно ещё. Получает молчание, а не отказ: ответ любого рода подтвердил бы,
-что бот существует и жив.
+**Stranger** — anybody else. Gets silence rather than a refusal: an answer of
+any kind would confirm that the bot exists and is alive.
 
-## Работа
+## The work
 
-**Tweet link** — ссылка, называющая один пост в X. Бывает прямой (`x.com/<user>/status/<id>`,
-плюс исторические написания `twitter.com` и `mobile.`) и завёрнутой (`t.co/<slug>` — до
-разворачивания о цели не известно ничего).
+**Tweet link** — a URL naming a single post on X. It arrives either direct
+(`x.com/<user>/status/<id>`, plus the historical `twitter.com` and `mobile.`
+spellings) or wrapped (`t.co/<slug>`, which says nothing about its target until
+it is followed).
 
-**Request** — одна ссылка, принятая от одного пользователя. Занимает один слот очереди и живёт
-до вердикта. Ссылка, приславшаяся дважды в одном сообщении, порождает один Request.
+**Request** — one link accepted from one user. It holds one queue slot and
+lives until it has a verdict. The same link sent twice in one message produces
+a single Request.
 
-**Clip** — один видеофайл, извлечённый из твита. Твит может дать несколько клипов; «гифка» X —
-это тоже клип (зацикленный mp4 без звука), отдельной сущностью не является.
+**Clip** — one video file extracted from a tweet. A tweet may yield several; an
+X "GIF" is a Clip too (a looping, audio-less mp4), not a separate kind of thing.
 
-**Verdict** — чем кончился Request: клипы доставлены либо названа причина. Молчания в исходе не
-бывает — статус-сообщение всегда доходит до финального состояния.
+**Verdict** — how a Request ended: the clips were delivered, or the reason was
+named. Silence is never an outcome — the status message always reaches a final
+state.
 
-## Доставка
+## Delivery
 
-**Chat delivery** — клип уехал в чат. Возможна, пока клип влезает в потолок Bot API (50 МБ).
+**Chat delivery** — the Clip went to the chat. Possible while it fits under the
+Bot API ceiling (50 MB).
 
-**Share delivery** — клип не влез и уехал на *Share*; в чат вместо него приходит путь.
+**Share delivery** — the Clip did not fit and went to the *Share* instead; the
+chat gets its path.
 
-**Share** — SMB-каталог на домашнем роутере (`KeeneticShared/twitter-dl`), куда складываются
-клипы, слишком большие для Telegram. Ретеншена нет: имя файла — единственный его индекс.
+**Share** — the SMB directory on the home router (`KeeneticShared/twitter-dl`)
+where clips too large for Telegram are filed. There is no retention policy: the
+file name is its only index.
 
-## Доступ к X
+## Access to X
 
-**Cookie session** — выгруженная из браузера сессия аккаунта Owner'а (`cookies.txt`). Ею бот
-представляется X'у; без неё доступны только публичные твиты.
+**Cookie session** — the Owner's X session, exported from a browser
+(`cookies.txt`). It is how the bot identifies itself to X; without it only
+public tweets are reachable.
 
-**Auth expiry** — состояние, когда Cookie session перестала аутентифицировать. Коварно тем, что
-публичные твиты продолжают качаться: снаружи всё «работает», а NSFW, возрастное и закрытое тихо
-отваливается. Единственная поломка, ради которой бот будит Owner'а.
+**Auth expiry** — the state in which the Cookie session no longer
+authenticates. Treacherous because public tweets keep downloading: from the
+outside everything still "works" while NSFW, age-gated and protected content
+quietly stops. The only breakage worth waking the Owner for.

@@ -1,78 +1,86 @@
-# Выкатка
+# Deployment
 
-Бот живёт третьим в джейле `bots` на `acer-freebsd-srv` (192.168.1.118), рядом с `lesson-tracker`
-и `chain-health`. Автоматика — роль `bot_deploy` из `automation/freebsd-server`, которую
-`ansible-pull` применяет по крону раз в 2 минуты.
+The bot lives as the third tenant of the `bots` jail on `acer-freebsd-srv`
+(192.168.1.118), next to `lesson-tracker` and `chain-health`. The automation is
+the `bot_deploy` role from `automation/freebsd-server`, applied by
+`ansible-pull` from cron every two minutes.
 
-## Как работает автоматика
+## How the automation works
 
-1. Раз в 2 минуты сервер тянет `automation` и применяет `freebsd-server/site.yml`.
-2. Роль смотрит теги `vX.Y.Z` этого репозитория (анонимный HTTPS) и берёт самый свежий.
-3. Тег деплоится, **только если** на его коммите есть зелёный check-run с именем ровно `ci`.
-   Запрос к GitHub API анонимный, поэтому **репозиторий обязан быть публичным** — у приватного
-   API отдаст 404, и это неотличимо от «CI не зелёный»: бот просто никогда не выкатится.
-4. `releases/<tag>` клонируется, зависимости ставятся **pip'ом** из корневого `requirements.txt`
-   (на сервере нет `uv`), `~/app` атомарно переключается на новый релиз, `service twitter_dl
-   restart`, затем health-check с ретраями. Провал — откат симлинка и рестарт прежней версии.
+1. Every two minutes the server pulls `automation` and applies
+   `freebsd-server/site.yml`.
+2. The role looks at this repository's `vX.Y.Z` tags (anonymous HTTPS) and takes
+   the newest one.
+3. A tag is deployed **only if** its commit carries a green check-run named
+   exactly `ci`. That API call is anonymous, so the **repository must be
+   public** — for a private one the API returns 404, which is indistinguishable
+   from "CI is not green": the bot would simply never be rolled out.
+4. `releases/<tag>` is cloned, dependencies are installed **with pip** from the
+   root `requirements.txt` (the server has no `uv`), `~/app` is switched
+   atomically to the new release, `service twitter_dl restart` runs, and then a
+   health check with retries. On failure the symlink is rolled back and the
+   previous version restarted.
 
-Роль **не создаёт** ни пользователя, ни venv, ни rc.d-скрипт, ни env-файл. Это разовый ручной
-бутстрап ниже.
+The role creates **neither** the user, nor the venv, nor the rc.d script, nor
+the env file. That is the one-time manual bootstrap below.
 
-## Разовый бутстрап сервера
+## One-time server bootstrap
 
-Всё внутри джейла: `ssh root@192.168.1.118`, далее `jexec bots sh`.
+All of it inside the jail: `ssh root@192.168.1.118`, then `jexec bots sh`.
 
 ```sh
-# 1. Пользователь и его дом
+# 1. The user and its home
 pw useradd twitterdl -m -d /home/twitterdl -s /bin/sh
 
-# 2. ffmpeg — без него yt-dlp не склеит раздельные видео- и аудиодорожки,
-#    то есть тихо просядет качество (см. ARCHITECTURE.md D2)
+# 2. ffmpeg — without it yt-dlp cannot merge separate video and audio streams,
+#    which silently caps quality (see ARCHITECTURE.md D2)
 pkg install -y ffmpeg
 
-# 3. venv (роль его не создаёт, а путь до site-packages захардкожен под python3.12)
+# 3. The venv (the role does not create it, and the site-packages path is
+#    hardcoded for python3.12)
 su -m twitterdl -c 'python3.12 -m venv /home/twitterdl/venv'
 
-# 4. Ловушка первого запуска: без этого каталога роль пытается сделать
-#    `mv ~/app ~/releases/pre-deploy`, падает и уходит в rescue
+# 4. The first-run trap: without this directory the role tries
+#    `mv ~/app ~/releases/pre-deploy`, fails, and falls into its rescue path
 mkdir -p /home/twitterdl/releases/pre-deploy
 chown -R twitterdl:twitterdl /home/twitterdl
 
-# 5. Каталог для скачиваний
+# 5. Scratch space for downloads
 install -d -o twitterdl -g twitterdl -m 700 /var/tmp/twitter-dl
 ```
 
-## Секреты (руками, копии — в KeePass)
+## Secrets (by hand; copies belong in KeePass)
 
 ```sh
-# Токен от @BotFather, id владельца и гостей
+# The @BotFather token, the owner's id and the guests'
 install -m 600 -o twitterdl /dev/null /usr/local/etc/twitter-dl.env
-# заполнить по образцу .env.example
+# fill it in following .env.example
 
-# Куки X: выгрузить cookies.txt из браузера, скопировать на сервер
+# X cookies: export cookies.txt from the browser, copy it to the server
 install -m 600 -o twitterdl cookies.txt /usr/local/etc/twitter-dl-cookies.txt
 ```
 
-Обязательный минимум в env-файле: `TELEGRAM_BOT_TOKEN`, `OWNER_ID`,
+The minimum the env file must carry: `TELEGRAM_BOT_TOKEN`, `OWNER_ID`,
 `TELEGRAM_PROXY=http://127.0.0.1:1080`, `COOKIES_FILE`, `RCLONE_CONFIG`.
 
-### rclone-конфиг: собственная копия, а не общая
+### The rclone config: a copy of its own, not a shared one
 
-Конфиг роли `backup` (`/usr/local/etc/backup/rclone.conf`) боту недоступен: сам каталог открыт
-только root'у, а ослаблять права бессмысленно — их вернёт следующий прогон ansible. Секретов в
-файле нет (доступ к шаре гостевой), поэтому бот получает свою копию:
+The `backup` role's config (`/usr/local/etc/backup/rclone.conf`) is out of the
+bot's reach: the directory itself is root-only, and loosening the permissions is
+pointless because the next ansible run puts them back. There are no secrets in
+the file (share access is guest), so the bot gets its own copy:
 
 ```sh
 install -m 600 -o twitterdl -g twitterdl \
     /usr/local/etc/backup/rclone.conf /usr/local/etc/twitter-dl-rclone.conf
 
-# Проверка доступа и создание каталога на шаре
+# Check access and create the directory on the share
 su -m twitterdl -c 'rclone --config /usr/local/etc/twitter-dl-rclone.conf lsd keenetic:'
 su -m twitterdl -c 'rclone --config /usr/local/etc/twitter-dl-rclone.conf mkdir keenetic:KeeneticShared/twitter-dl'
 ```
 
-Если хост шары или имя когда-нибудь поменяются, копию придётся обновить руками — она намеренно
-живёт вне ansible.
+If the share's host or name ever changes, this copy has to be updated by hand —
+it deliberately lives outside ansible.
 
 ## rc.d
 
@@ -81,12 +89,13 @@ install -m 755 /home/twitterdl/app/deploy/rc.d/twitter_dl /usr/local/etc/rc.d/tw
 sysrc twitter_dl_enable=YES
 ```
 
-Скрипт версионируется в этом репозитории (`deploy/rc.d/twitter_dl`, см. ARCHITECTURE.md D13);
-копия на сервере обновляется вручную при изменении оригинала.
+The script is versioned in this repository (`deploy/rc.d/twitter_dl`, see
+ARCHITECTURE.md D13); the copy on the server is updated by hand whenever the
+original changes.
 
-## Регистрация в деплое
+## Registering with the deploy
 
-В `automation/freebsd-server/site.yml`, список `deploy_bots`:
+In `automation/freebsd-server/site.yml`, the `deploy_bots` list:
 
 ```yaml
       - name: twitter-dl
@@ -101,32 +110,36 @@ sysrc twitter_dl_enable=YES
         env_file: /usr/local/etc/twitter-dl.env
 ```
 
-`backup_dumps` не трогаем: базы нет (ARCHITECTURE.md D9), а датасет джейла и так снапшотится
-sanoid'ом.
+`backup_dumps` is left alone: there is no database (ARCHITECTURE.md D9), and the
+jail's dataset is snapshotted by sanoid anyway.
 
-## Требования к репозиторию на GitHub
+## What the GitHub repository must look like
 
-- **Публичный** (см. выше, иначе деплой не состоится никогда).
-- `.github/workflows/ci.yml` с job'ом, чьё имя ровно `ci`.
-- Ruleset `protect-main`: запрет удаления и force-push, PR обязателен (0 апрувов), линейная
-  история, обязательный статус-чек `ci`, пустой bypass-список.
-- Release immutability — чтобы тег нельзя было передвинуть между проверкой CI и клоном.
-- Теги строго `vX.Y.Z`. Откат — **новым тегом**, никогда не передвиганием старого.
+- **Public** (see above — otherwise the deploy never happens at all).
+- `.github/workflows/ci.yml` with a job named exactly `ci`.
+- Ruleset `protect-main`: restrict deletions and force pushes, require a pull
+  request (0 approvals), linear history, require the `ci` status check, empty
+  bypass list.
+- Release immutability, so a tag cannot be moved between the CI check and the
+  clone.
+- Tags strictly `vX.Y.Z`. Roll back with a **new tag**, never by moving an old
+  one.
 
-## Релиз
+## Releasing
 
 ```sh
-uv export --format requirements-txt --no-hashes --no-dev -o requirements.txt  # если менялись зависимости
+uv export --format requirements-txt --no-hashes --no-dev -o requirements.txt  # if dependencies changed
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-Дальше сервер сам, в течение двух минут. Что произошло — видно так:
+The server takes it from there, within two minutes. What happened is visible
+like this:
 
 ```sh
-tail -f /var/log/ansible-pull.log          # на хосте
-grep bot-deploy /var/log/messages          # вердикт роли
+tail -f /var/log/ansible-pull.log          # on the host
+grep bot-deploy /var/log/messages          # the role's verdict
 jexec bots service twitter_dl status
 ```
 
-Красный CI → тег молча игнорируется, в `/var/log/messages` появляется запись
-`... skipped, ci not green`.
+A red CI means the tag is ignored silently, with a `... skipped, ci not green`
+line appearing in `/var/log/messages`.

@@ -1,37 +1,44 @@
 # twitter-dl-tgbot
 
-Личный телеграм-бот: присылаешь ссылку на пост в X — получаешь оттуда видео в лучшем доступном
-качестве. Качает `yt-dlp` под личными куками владельца, поэтому доступны NSFW, возрастные
-ограничения и закрытые аккаунты, на которые владелец подписан.
+A personal Telegram bot: send it a link to a post on X and get the video from
+it, at the best quality available. Downloads run through `yt-dlp` under the
+owner's own cookies, so NSFW, age-gated and protected accounts the owner
+follows are all reachable.
 
-Публичные боты-качалки живут за счёт ферм одноразовых аккаунтов и покупных резидентных прокси, а
-окупаются подписками на каналы, рекламой и пейволлом за HD. У личного бота этой экономики нет:
-два-три пользователя, свой аккаунт, свой канал наружу.
+Public downloader bots live off farms of throwaway accounts and bought
+residential proxies, and pay for it with forced channel subscriptions, ads and
+an HD paywall. A personal bot has none of that economy: two or three users, one
+real account, one uplink.
 
-## Что он делает
+## What it does
 
-- Ссылка в сообщении (`x.com`, `twitter.com`, `t.co`) → видео в чат. Команд нет, ссылка и есть команда.
-- Несколько ссылок в одном сообщении и несколько роликов в одном твите — все по очереди.
-- Клип до 50 МБ (потолок Bot API) приходит в чат подписью-ссылкой на твит. Больше — уезжает
-  `rclone` на домашнюю SMB-шару, а в чат приходит путь к файлу.
-- Очередь строго последовательная: один канал наружу, параллельность только врала бы о прогрессе.
-- Чужим — молчание: бот не подтверждает даже своё существование.
+- A link in a message (`x.com`, `twitter.com`, `t.co`) becomes a video in the
+  chat. There is no command to remember — the link is the command.
+- Several links in one message, and several clips in one tweet, are all handled
+  in turn.
+- A clip up to 50 MB (the Bot API ceiling) arrives in the chat, captioned with
+  the tweet's link. Anything larger is copied by `rclone` to the home SMB share,
+  and the chat gets the path to it.
+- The queue is strictly sequential: there is one uplink, and parallelism would
+  only make progress reporting lie.
+- Strangers get silence: the bot does not even confirm that it exists.
 
-## Стек
+## Stack
 
-Python 3.12, aiogram 3 (long polling), yt-dlp как библиотека, pydantic-settings, uv.
-Базы данных нет вовсе: состояние — env, куки и лог.
+Python 3.12, aiogram 3 (long polling), yt-dlp used as a library,
+pydantic-settings, uv. No database whatsoever: the state is the environment,
+the cookies and the log.
 
-## Разработка
+## Development
 
 ```sh
 uv sync
-cp .env.example .env      # заполнить токен тестового бота и OWNER_ID
+cp .env.example .env      # fill in a test bot's token and OWNER_ID
 uv run pre-commit install
 uv run python -m twitter_dl
 ```
 
-Проверки — те же, что гоняет CI:
+The same checks CI runs:
 
 ```sh
 uv run pytest
@@ -40,41 +47,49 @@ uv run ruff format .
 uv run mypy src tests
 ```
 
-`requirements.txt` порождается из `uv.lock` и обязан с ним совпадать (на сервере нет `uv`,
-зависимости ставятся pip'ом):
+`requirements.txt` is generated from `uv.lock` and must agree with it (the
+server has no `uv`; it installs with pip):
 
 ```sh
 uv export --format requirements-txt --no-hashes --no-dev -o requirements.txt
 ```
 
-Обновить yt-dlp — единственную зависимость, которая стареет за дни, а не за месяцы:
+Updating yt-dlp — the one dependency that ages in days rather than months:
 
 ```sh
 uv lock --upgrade-package yt-dlp && uv export --format requirements-txt --no-hashes --no-dev -o requirements.txt
 ```
 
-## Ручной прогон перед выкаткой
+## Manual run-through before a release
 
-Автотесты не ходят в сеть, поэтому связку «X → yt-dlp → Telegram» проверяет только человек.
-С тестовым токеном:
+The automated tests never touch the network, so the X → yt-dlp → Telegram chain
+is only ever exercised by a person. With a test token:
 
-1. Обычный твит с видео → ролик в чате, подпись — ссылка на твит.
-2. Твит с несколькими роликами → приходят все, статус-сообщение исчезает после последнего.
-3. Твит без видео → «That tweet has no video in it».
-4. Мусорный текст без ссылок → «No tweet link found».
-5. Шесть ссылок подряд → шестая отбита «Queue is full».
-6. `MAX_TG_VIDEO_MB=1` → ветка шары: файл на месте, в чате путь.
-7. Испорченный `COOKIES_FILE` + NSFW-твит → владельцу одно уведомление, заявителю вежливый отказ.
-8. Прокси выключить на минуту → «Can't reach X right now», бот не виснет и переживает.
+1. An ordinary tweet with a video → the clip arrives, captioned with the link.
+2. A tweet with several clips → all of them arrive, and the status message
+   disappears after the last one.
+3. A tweet with no video → "That tweet has no video in it".
+4. Text with no links at all → "No tweet link found".
+5. Six links at once → the sixth is refused with "Queue is full".
+6. `MAX_TG_VIDEO_MB=1` → the share route: the file lands there and the chat gets
+   the path.
+7. A broken `COOKIES_FILE` plus an NSFW tweet → one alert to the owner, a polite
+   refusal to whoever asked.
+8. Proxy switched off for a minute → "Can't reach X right now", and the bot
+   neither hangs nor dies.
 
-## Эксплуатация
+## Operations
 
-Бот живёт третьим в джейле `bots` на домашнем FreeBSD-сервере (юзер `twitterdl`, rc.d
-`twitter_dl`, env `/usr/local/etc/twitter-dl.env`). Деплой — `ansible-pull` по тегу `vX.Y.Z`
-при зелёном чеке `ci`; подробности и порядок ручного бутстрапа — в [docs/DEPLOY.md](docs/DEPLOY.md).
+The bot lives as the third tenant of the `bots` jail on the home FreeBSD server
+(user `twitterdl`, rc.d script `twitter_dl`, env file
+`/usr/local/etc/twitter-dl.env`). Deployment is `ansible-pull` on a `vX.Y.Z`
+tag with a green `ci` check; the details and the one-time bootstrap are in
+[docs/DEPLOY.md](docs/DEPLOY.md).
 
-Куки протухают — это нормальный ход вещей. Бот заметит сам и напишет владельцу один раз на каждую
-версию файла: перевыгрузить `cookies.txt` из браузера и заменить файл на сервере.
+Cookies expire — that is the normal course of things. The bot notices by itself
+and tells the owner once per exported session: re-export `cookies.txt` from the
+browser and replace the file on the server.
 
-Решения и их причины — в [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), словарь предметной
-области — в [CONTEXT.md](CONTEXT.md).
+The decisions and the reasoning behind them are in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); the domain vocabulary is in
+[CONTEXT.md](CONTEXT.md).
