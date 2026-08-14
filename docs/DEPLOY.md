@@ -115,13 +115,22 @@ jail's dataset is snapshotted by sanoid anyway.
 
 ## What the GitHub repository must look like
 
+All of it is applied by `automation/scripts/new-bot-repo.sh`, which copies the
+settings and rulesets from an already-configured bot repository rather than
+having them clicked in again. Nothing below needs doing by hand.
+
 - **Public** (see above — otherwise the deploy never happens at all).
 - `.github/workflows/ci.yml` with a job named exactly `ci`.
 - Ruleset `protect-main`: restrict deletions and force pushes, require a pull
   request (0 approvals), linear history, require the `ci` status check, empty
   bypass list.
-- Release immutability, so a tag cannot be moved between the CI check and the
-  clone.
+- A tag ruleset (`immutable-version-tags`) forbidding `update`, `deletion` and
+  force pushes on `refs/tags/v*`, so a tag cannot be moved between the CI check
+  and the clone.
+
+  Not the "Release immutability" checkbox in Settings: that one has no API at
+  all, and it only binds tags carrying a *published Release* — while the deploy
+  pushes bare tags, which it would never have covered.
 - Tags strictly `vX.Y.Z`. Roll back with a **new tag**, never by moving an old
   one.
 
