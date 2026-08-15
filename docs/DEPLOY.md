@@ -84,14 +84,17 @@ it deliberately lives outside ansible.
 
 ## rc.d
 
+The rc.d script is not in this repository and needs no installing: it lives in
+`automation/freebsd-server/roles/bot_rc/files/twitter_dl` and is deployed by
+ansible, which also restarts the service when the script changes (see
+ARCHITECTURE.md D13). What remains manual is the launch switch itself:
+
 ```sh
-install -m 755 /home/twitterdl/app/deploy/rc.d/twitter_dl /usr/local/etc/rc.d/twitter_dl
 sysrc twitter_dl_enable=YES
 ```
 
-The script is versioned in this repository (`deploy/rc.d/twitter_dl`, see
-ARCHITECTURE.md D13); the copy on the server is updated by hand whenever the
-original changes.
+Deliberately manual — the role never touches `rc.conf`, so a bot that is not
+ready (no secrets, no first tag) cannot be started by a deploy tick.
 
 ## Registering with the deploy
 

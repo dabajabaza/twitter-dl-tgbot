@@ -304,20 +304,35 @@ worker is tested with doubles without yt-dlp installed at all.
 
 ---
 
-## D13. The rc.d script lives in the repository
+## D13. The rc.d script lives in the automation repository
 
-**Context.** For both neighbours the rc.d script exists only on the server. In
-`lesson-tracker` it is written down plainly: a drift between the two shows up in
-no test — only in the server's log.
+*(Revised. The first version of this decision kept the script in this
+repository under `deploy/rc.d/` — that fixed "the only copy is on the server",
+but installation was still manual and the layering was wrong.)*
 
-**Decision.** `deploy/rc.d/twitter_dl` is versioned here, next to the code it
-launches. Installation is still manual (the `bot_deploy` ansible role renders no
-templates), but there is a single source of truth, and a change to the
-supervisor's timeout appears in the history alongside the code change.
+**Context.** For both neighbouring bots the rc.d script existed only on the
+server: no history, no review, and drift visible in no test — only in the
+server's log. Keeping it here was better than that, but an rc.d file is
+configuration of one specific FreeBSD server, while this bot is OS-agnostic —
+and everything else about that server (deploy role, backups, the sd_notify
+supervisor) already lives in the automation repository.
 
-**Consequences.** The copy on the server can still drift from the repository —
-that is caught only by eye during a deploy; but now there is something to
-compare against. The installation order is in [DEPLOY.md](DEPLOY.md).
+**Decision.** The script lives in `automation/freebsd-server/roles/bot_rc/`
+along with the neighbours', and ansible deploys it: validated before replacing
+the live file, service restarted on change — but only if it is enabled in
+`rc.conf`. Enabling the service is deliberately left to the operator: it is the
+launch switch, and a deploy tick must not be able to start a bot whose secrets
+or first release are not in place yet.
+
+**Consequences.** One source of truth *and* automatic convergence — the copy on
+the server can no longer drift silently, which the in-repo variant never
+guaranteed. The price is that the pairing between this bot's constants and the
+script's arguments now crosses repositories: `--watchdog-sec 90` there must
+stay comfortably above the 30-second liveness probe here (see `__main__.py`),
+and both sides carry a comment saying so.
+
+**Revisit when** the server stops being FreeBSD, or the bot grows a second
+deployment target.
 
 ---
 
