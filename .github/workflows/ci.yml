@@ -60,6 +60,14 @@ jobs:
           uv export --format requirements-txt --no-hashes --no-dev -o requirements.txt
           git diff --exit-code -- requirements.txt
 
+      # The jail runs FreeBSD, where PyPI has no wheels at all: anything without
+      # a pure-python wheel is built from source, and pydantic-core needs Rust
+      # the jail does not have. Those packages come from py312-* ports instead,
+      # which only works while the pinned version matches the port exactly.
+      # Without this check a lockfile bump fails halfway through a deploy.
+      - name: Pins still match the FreeBSD ports tree
+        run: python3 scripts/check-freebsd-pins.py
+
       - name: Lint
         run: uv run ruff check .
 
