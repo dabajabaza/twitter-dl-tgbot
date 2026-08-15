@@ -58,7 +58,8 @@ def ports_versions() -> dict[str, str]:
         archive.flush()
         index = subprocess.run(
             ["tar", "-xOf", archive.name, "packagesite.yaml"],
-            check=True, capture_output=True,
+            check=True,
+            capture_output=True,
         ).stdout
     versions: dict[str, str] = {}
     for line in index.splitlines():
