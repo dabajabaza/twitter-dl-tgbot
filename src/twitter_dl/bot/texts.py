@@ -8,7 +8,7 @@ them can break.
 
 HELP = (
     "Send me a link to an X post and I'll download the video from it.\n\n"
-    "Links look like https://x.com/user/status/1234567890 — t.co short links work too, "
+    "Links look like https://x.com/i/status/0 — t.co short links work too, "
     "and a message may hold several links at once.\n\n"
     "Clips up to {max_mb} MB arrive here in the chat. Anything larger goes to the home "
     "share instead, and I'll reply with the path."
