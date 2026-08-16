@@ -10,10 +10,11 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.session.base import BaseSession
 from aiogram.methods import EditMessageText, SendMessage, SendVideo, TelegramMethod
 from aiogram.methods.get_me import GetMe
-from aiogram.types import Chat, Message, Update
+from aiogram.types import CallbackQuery, Chat, Message, Update
 from aiogram.types import User as TgUser
 
 from twitter_dl.runtime.worker import RequestQueue
+from twitter_dl.services.overflow import OverflowCatalog
 
 M = TypeVar("M", bound=TelegramMethod[Any])
 
@@ -117,6 +118,32 @@ def make_update_message(
     return Update(update_id=update_id, message=message)
 
 
+def make_callback_update(
+    data: str,
+    *,
+    user_id: int,
+    chat_id: int | None = None,
+    update_id: int = 1,
+) -> Update:
+    chat = Chat(id=chat_id if chat_id is not None else user_id, type="private")
+    user = TgUser(id=user_id, is_bot=False, first_name="Test")
+    message = Message(
+        message_id=7000,
+        date=datetime.now(UTC),
+        chat=chat,
+        from_user=user,
+        text="Overflow delivery",
+    )
+    callback = CallbackQuery(
+        id=f"callback-{update_id}",
+        from_user=user,
+        chat_instance="test",
+        message=message,
+        data=data,
+    )
+    return Update(update_id=update_id, callback_query=callback)
+
+
 @dataclass
 class BotHarness:
     """A real Dispatcher — the one ``build_dispatcher`` wires for production —
@@ -126,6 +153,7 @@ class BotHarness:
     dp: Dispatcher
     session: RecordingSession
     queue: RequestQueue
+    overflow_catalog: OverflowCatalog
     _next_update_id: int = field(default=1)
 
     def _update_id(self) -> int:
@@ -136,4 +164,8 @@ class BotHarness:
         update = make_update_message(
             text, user_id=user_id, chat_type=chat_type, update_id=self._update_id()
         )
+        await self.dp.feed_update(self.bot, update)
+
+    async def press(self, data: str, *, user_id: int = 1) -> None:
+        update = make_callback_update(data, user_id=user_id, update_id=self._update_id())
         await self.dp.feed_update(self.bot, update)

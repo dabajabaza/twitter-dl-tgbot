@@ -2,7 +2,10 @@
 
 import re
 
+import pytest
+
 from twitter_dl.bot import texts
+from twitter_dl.services.overflow import OverflowChoice, OverflowState
 
 _PUBLIC = {
     name: value for name, value in vars(texts).items() if name.isupper() and isinstance(value, str)
@@ -22,7 +25,7 @@ def test_the_bot_speaks_english() -> None:
 
 
 def test_nothing_is_formatted_as_html_or_markdown() -> None:
-    # Replies quote uploader handles, yt-dlp messages and Windows share paths;
+    # Replies quote uploader handles, yt-dlp messages and external locators;
     # plain text is the only format none of them can break.
     marked_up = {name for name, value in _PUBLIC.items() if _MARKUP.search(value)}
     assert not marked_up
@@ -30,12 +33,21 @@ def test_nothing_is_formatted_as_html_or_markdown() -> None:
 
 def test_every_placeholder_is_one_the_caller_actually_supplies() -> None:
     supplied = {
-        "HELP": {"max_mb"},
+        "HELP": {"max_mb", "overflow"},
+        "HELP_OVERFLOW_READY": {"adapter"},
         "QUEUE_FULL": {"limit"},
         "QUEUED_POSITION": {"position"},
         "DOWNLOADING_PROGRESS": {"progress"},
         "UPLOADING_MANY": {"index", "total"},
-        "SHARE_RESULT": {"size", "path"},
+        "DELIVERING_OVERFLOW": {"adapter"},
+        "OVERFLOW_RESULT": {"size", "adapter", "location"},
+        "OVERFLOW_FAILED": {"adapter"},
+        "OVERFLOW_DISABLED": {"max_mb"},
+        "OVERFLOW_MISSING": {"max_mb", "adapter"},
+        "OVERFLOW_MISCONFIGURED": {"max_mb", "adapter"},
+        "OVERFLOW_MENU": {"current"},
+        "OVERFLOW_MENU_PROBLEMS": {"problems"},
+        "OVERFLOW_SELECTED": {"adapter"},
         "TIMED_OUT": {"minutes"},
         "OWNER_AUTH_EXPIRED": {"path", "detail"},
     }
@@ -50,3 +62,19 @@ class TestHumanSize:
 
     def test_a_gigabyte_scale_file_is_not_reported_as_four_digits_of_megabytes(self) -> None:
         assert texts.human_size(2 * 1024 * 1024 * 1024) == "2.0 GB"
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        (OverflowState.OFF, "Overflow delivery is off"),
+        (OverflowState.MISSING, "is missing"),
+        (OverflowState.MISCONFIGURED, "is configured incorrectly"),
+    ],
+)
+def test_every_unavailable_overflow_state_gets_an_explicit_verdict(
+    state: OverflowState, expected: str
+) -> None:
+    choice = OverflowChoice(adapter_id="test", label="Test", state=state)
+
+    assert expected in texts.overflow_unavailable(choice, max_mb=50)

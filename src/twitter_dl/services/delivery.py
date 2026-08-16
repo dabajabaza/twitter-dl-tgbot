@@ -1,23 +1,15 @@
-"""Getting a downloaded clip to the person who asked for it.
+"""Route a downloaded Clip to Telegram or its selected Overflow destination."""
 
-Two destinations, chosen by size alone. Under the Bot API's upload ceiling the
-clip goes into the chat, which is the whole point of the bot. Over it, Telegram
-simply refuses, so the clip goes to the SMB share on the router and the chat
-gets the path instead — the same answer for everyone, since teaching the bot who
-is on the LAN would buy nothing (see docs/ARCHITECTURE.md D7).
-"""
-
-import asyncio
 import logging
 import re
 from dataclasses import dataclass
-from pathlib import Path
 
 from aiogram import Bot
 from aiogram.types import FSInputFile
 
 from twitter_dl.domain import Clip
-from twitter_dl.errors import ShareUnavailable
+from twitter_dl.errors import OverflowFailed, OverflowUnavailable
+from twitter_dl.services.overflow import OverflowChoice
 
 logger = logging.getLogger(__name__)
 
@@ -41,38 +33,38 @@ class ChatDelivery:
 
 
 @dataclass(frozen=True)
-class ShareDelivery:
-    """The clip is on the share, under this human-facing path."""
+class OverflowDelivery:
+    """The clip is outside Telegram, at this human-facing locator."""
 
     size_bytes: int
-    display_path: str
+    adapter_label: str
+    location: str
 
 
-DeliveryResult = ChatDelivery | ShareDelivery
+DeliveryResult = ChatDelivery | OverflowDelivery
 
 
 class ClipDelivery:
-    """Routes each clip by size, and knows how to name it on the share."""
+    """Routes each clip by size; an Adapter owns every external destination."""
 
     def __init__(
         self,
         bot: Bot,
         *,
         max_chat_bytes: int,
-        rclone_binary: str,
-        rclone_config: Path | None,
-        rclone_remote: str,
-        share_path_prefix: str,
     ) -> None:
         self._bot = bot
         self._max_chat_bytes = max_chat_bytes
-        self._rclone_binary = rclone_binary
-        self._rclone_config = rclone_config
-        self._rclone_remote = rclone_remote
-        self._share_path_prefix = share_path_prefix
 
     async def deliver(
-        self, clip: Clip, *, chat_id: int, caption: str, index: int = 1, total: int = 1
+        self,
+        clip: Clip,
+        *,
+        chat_id: int,
+        caption: str,
+        overflow: OverflowChoice,
+        index: int = 1,
+        total: int = 1,
     ) -> DeliveryResult:
         size = clip.path.stat().st_size
         if size <= self._max_chat_bytes:
@@ -85,51 +77,27 @@ class ClipDelivery:
             )
             return ChatDelivery(size_bytes=size)
 
-        name = share_name(clip, index=index, total=total)
-        await self._copy_to_share(clip.path, name)
-        return ShareDelivery(size_bytes=size, display_path=f"{self._share_path_prefix}\\{name}")
-
-    async def _copy_to_share(self, source: Path, name: str) -> None:
-        argv = [self._rclone_binary]
-        if self._rclone_config is not None:
-            argv += ["--config", str(self._rclone_config)]
-        # copyto rather than copy: the destination is a full file path, and the
-        # name on the share is ours, not the scratch file's.
-        # --inplace: without it rclone writes "<name>.partial" and renames on
-        # completion, so a copy killed on timeout leaves hundreds of megabytes
-        # of rubbish on a share that has no retention policy at all.
-        argv += [
-            "--no-traverse",
-            "--inplace",
-            "copyto",
-            str(source),
-            f"{self._rclone_remote}/{name}",
-        ]
-
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        if not overflow.ready or overflow.destination is None:
+            raise OverflowUnavailable(
+                adapter_id=overflow.adapter_id,
+                state=overflow.state.value,
             )
-        except OSError as exc:
-            # rclone missing from the supervisor's PATH, or RCLONE_BINARY
-            # mistyped — the likeliest first failure on a fresh server. Without
-            # this it surfaces as the generic "download failed" instead of the
-            # share-specific answer that says where to look.
-            logger.error("could not run %s: %s", self._rclone_binary, exc)
-            raise ShareUnavailable(f"cannot run {self._rclone_binary}: {exc}") from exc
+        name = overflow_name(clip, index=index, total=total)
         try:
-            _, stderr = await process.communicate()
-        except asyncio.CancelledError:
-            # The request timed out or the bot is shutting down. Killing the
-            # child is on us: nothing reaps it otherwise, and an rclone stuck on
-            # a dead share would outlive every request that follows.
-            process.kill()
-            await process.wait()
-            raise
-        if process.returncode != 0:
-            message = stderr.decode("utf-8", errors="replace").strip()
-            logger.error("rclone failed (%s): %s", process.returncode, message)
-            raise ShareUnavailable(message or f"rclone exited with {process.returncode}")
+            raw_location = await overflow.destination.store(clip.path, name=name)
+            if not isinstance(raw_location, str):
+                raise ValueError("OverflowDestination.store returned a non-string locator")
+            location = str(raw_location).strip()
+            if not location:
+                raise ValueError("OverflowDestination.store returned an empty locator")
+        except (Exception, SystemExit) as exc:
+            logger.exception("overflow adapter %s failed", overflow.adapter_id)
+            raise OverflowFailed(adapter_id=overflow.adapter_id, detail=str(exc)) from exc
+        return OverflowDelivery(
+            size_bytes=size,
+            adapter_label=overflow.label,
+            location=location,
+        )
 
 
 def _utf16_length(text: str) -> int:
@@ -160,11 +128,11 @@ def _fit_caption(caption: str) -> str:
     return kept + "…"
 
 
-def share_name(clip: Clip, *, index: int = 1, total: int = 1) -> str:
-    """``<date>-<uploader>-<tweet id>.mp4``, disambiguated when a tweet has several clips.
+def overflow_name(clip: Clip, *, index: int = 1, total: int = 1) -> str:
+    """``<date>-<uploader>-<tweet id>.mp4``, disambiguated for several clips.
 
-    Sortable by date first, and greppable by author or tweet id — the share has
-    no retention policy, so the name is the only index it will ever have.
+    Sortable by date first and greppable by author or tweet id, independent of
+    the selected external destination.
     """
     uploader = _safe(clip.uploader)
     tweet_id = _safe(clip.tweet_id)

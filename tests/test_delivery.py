@@ -1,74 +1,76 @@
-"""Size decides the destination, and the share decides the name."""
+"""Size chooses Chat or the Request's captured Overflow destination."""
 
-import asyncio
 from datetime import date
 from pathlib import Path
-from typing import Any
 
 import pytest
 from aiogram.methods import SendVideo
 
 from tests.helpers.bot_harness import BotHarness
 from tests.helpers.factories import make_clip
-from twitter_dl.errors import ShareUnavailable
+from twitter_dl.errors import OverflowFailed, OverflowUnavailable
 from twitter_dl.services.delivery import (
     ChatDelivery,
     ClipDelivery,
-    ShareDelivery,
+    OverflowDelivery,
     _fit_caption,
-    share_name,
+    overflow_name,
 )
-
-SHARE_PREFIX = r"\\192.168.1.1\KeeneticShared\twitter-dl"
-
-
-class FakeProcess:
-    def __init__(self, returncode: int = 0, stderr: bytes = b"") -> None:
-        self.returncode = returncode
-        self._stderr = stderr
-        self.killed = False
-
-    async def communicate(self) -> tuple[bytes, bytes]:
-        return b"", self._stderr
-
-    def kill(self) -> None:
-        self.killed = True
-
-    async def wait(self) -> int:
-        return self.returncode
+from twitter_dl.services.overflow import OverflowChoice, OverflowDestination, OverflowState
 
 
-@pytest.fixture
-def rclone_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
-    """Records rclone invocations instead of running them."""
-    calls: list[list[str]] = []
+class FakeDestination(OverflowDestination):
+    label = "Somewhere"
 
-    async def fake_exec(*argv: str, **kwargs: Any) -> FakeProcess:
-        calls.append(list(argv))
-        return FakeProcess()
+    def __init__(self, *, error: BaseException | None = None) -> None:
+        self.error = error
+        self.stored: list[tuple[Path, str]] = []
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    return calls
+    async def store(self, source: Path, *, name: str) -> str:
+        self.stored.append((source, name))
+        if self.error is not None:
+            raise self.error
+        return f"https://files.example/{name}"
 
 
-def build_delivery(harness: BotHarness, *, max_chat_mb: int = 50) -> ClipDelivery:
-    return ClipDelivery(
-        harness.bot,
-        max_chat_bytes=max_chat_mb * 1024 * 1024,
-        rclone_binary="rclone",
-        rclone_config=Path("/usr/local/etc/backup/rclone.conf"),
-        rclone_remote="keenetic:KeeneticShared/twitter-dl",
-        share_path_prefix=SHARE_PREFIX,
+def ready(destination: FakeDestination | None = None) -> OverflowChoice:
+    target = destination or FakeDestination()
+    return OverflowChoice(
+        adapter_id="somewhere",
+        label=target.label,
+        state=OverflowState.READY,
+        destination=target,
     )
 
 
-async def test_a_clip_within_the_limit_goes_to_the_chat_captioned_with_its_tweet(
-    harness: BotHarness, tmp_path: Path
+OFF = OverflowChoice(adapter_id="none", label="Off", state=OverflowState.OFF)
+
+
+def build_delivery(harness: BotHarness, *, max_chat_mb: int = 50) -> ClipDelivery:
+    return ClipDelivery(harness.bot, max_chat_bytes=max_chat_mb * 1024 * 1024)
+
+
+@pytest.mark.parametrize(
+    "overflow",
+    [
+        OFF,
+        OverflowChoice("gone", "Gone", OverflowState.MISSING),
+        OverflowChoice("broken", "Broken", OverflowState.MISCONFIGURED),
+    ],
+)
+async def test_a_clip_within_the_limit_ignores_overflow_and_goes_to_the_chat(
+    harness: BotHarness,
+    tmp_path: Path,
+    overflow: OverflowChoice,
 ) -> None:
     clip = make_clip(tmp_path, size_bytes=1024)
-    delivery = build_delivery(harness)
 
-    result = await delivery.deliver(clip, chat_id=42, caption="https://x.com/a/status/1")
+    result = await build_delivery(harness).deliver(
+        clip,
+        chat_id=42,
+        caption="https://x.com/a/status/1",
+        overflow=overflow,
+    )
 
     assert isinstance(result, ChatDelivery)
     sent = harness.session.calls_of(SendVideo)
@@ -77,120 +79,152 @@ async def test_a_clip_within_the_limit_goes_to_the_chat_captioned_with_its_tweet
     assert sent[0].chat_id == 42
 
 
-async def test_a_clip_over_the_limit_goes_to_the_share_instead(
-    harness: BotHarness, tmp_path: Path, rclone_calls: list[list[str]]
+async def test_a_clip_over_the_limit_uses_the_captured_adapter(
+    harness: BotHarness, tmp_path: Path
 ) -> None:
     clip = make_clip(tmp_path, size_bytes=2 * 1024 * 1024)
-    delivery = build_delivery(harness, max_chat_mb=1)
+    destination = FakeDestination()
 
-    result = await delivery.deliver(clip, chat_id=42, caption="ignored")
+    result = await build_delivery(harness, max_chat_mb=1).deliver(
+        clip,
+        chat_id=42,
+        caption="ignored",
+        overflow=ready(destination),
+    )
 
-    assert isinstance(result, ShareDelivery)
+    assert isinstance(result, OverflowDelivery)
+    assert result.adapter_label == destination.label
+    assert result.location.startswith("https://files.example/")
+    assert destination.stored == [(clip.path, overflow_name(clip))]
     assert not harness.session.calls_of(SendVideo)
-    assert result.display_path.startswith(SHARE_PREFIX)
-    assert rclone_calls and rclone_calls[0][0] == "rclone"
-    assert "copyto" in rclone_calls[0]
-    assert rclone_calls[0][-1].endswith(share_name(clip))
 
 
-async def test_the_configured_rclone_config_is_the_one_used(
-    harness: BotHarness, tmp_path: Path, rclone_calls: list[list[str]]
+async def test_a_final_file_over_the_limit_names_an_unavailable_adapter(
+    harness: BotHarness, tmp_path: Path
 ) -> None:
     clip = make_clip(tmp_path, size_bytes=2 * 1024 * 1024)
 
-    await build_delivery(harness, max_chat_mb=1).deliver(clip, chat_id=42, caption="x")
+    with pytest.raises(OverflowUnavailable, match="'none' is off"):
+        await build_delivery(harness, max_chat_mb=1).deliver(
+            clip,
+            chat_id=42,
+            caption="ignored",
+            overflow=OFF,
+        )
 
-    argv = rclone_calls[0]
-    assert argv[argv.index("--config") + 1] == "/usr/local/etc/backup/rclone.conf"
 
-
-async def test_a_share_that_will_not_take_the_file_is_reported_not_swallowed(
-    harness: BotHarness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_an_adapter_failure_is_not_reported_as_a_download_failure(
+    harness: BotHarness, tmp_path: Path
 ) -> None:
-    async def failing_exec(*argv: str, **kwargs: Any) -> FakeProcess:
-        return FakeProcess(returncode=1, stderr=b"mount not found")
+    clip = make_clip(tmp_path, size_bytes=2 * 1024 * 1024)
+    destination = FakeDestination(error=RuntimeError("quota exceeded"))
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", failing_exec)
+    with pytest.raises(OverflowFailed, match="quota exceeded"):
+        await build_delivery(harness, max_chat_mb=1).deliver(
+            clip,
+            chat_id=42,
+            caption="ignored",
+            overflow=ready(destination),
+        )
+
+
+async def test_an_empty_adapter_locator_is_an_overflow_failure(
+    harness: BotHarness, tmp_path: Path
+) -> None:
+    clip = make_clip(tmp_path, size_bytes=2 * 1024 * 1024)
+    destination = FakeDestination()
+
+    async def empty_store(source: Path, *, name: str) -> str:
+        return "  "
+
+    destination.store = empty_store  # type: ignore[method-assign]
+
+    with pytest.raises(OverflowFailed, match="empty locator"):
+        await build_delivery(harness, max_chat_mb=1).deliver(
+            clip,
+            chat_id=42,
+            caption="ignored",
+            overflow=ready(destination),
+        )
+
+
+async def test_system_exit_from_an_adapter_is_an_overflow_failure(
+    harness: BotHarness, tmp_path: Path
+) -> None:
     clip = make_clip(tmp_path, size_bytes=2 * 1024 * 1024)
 
-    with pytest.raises(ShareUnavailable, match="mount not found"):
-        await build_delivery(harness, max_chat_mb=1).deliver(clip, chat_id=42, caption="x")
+    with pytest.raises(OverflowFailed):
+        await build_delivery(harness, max_chat_mb=1).deliver(
+            clip,
+            chat_id=42,
+            caption="ignored",
+            overflow=ready(FakeDestination(error=SystemExit("bad plugin"))),
+        )
 
 
-async def test_an_abandoned_copy_does_not_leave_rclone_running(
-    harness: BotHarness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_an_adapter_locator_is_normalized_only_once(
+    harness: BotHarness, tmp_path: Path
 ) -> None:
-    process = FakeProcess()
+    class StatefulLocator(str):
+        calls = 0
 
-    async def never_finishes() -> tuple[bytes, bytes]:
-        await asyncio.sleep(3600)
-        return b"", b""
+        def strip(self, chars: str | None = None) -> str:
+            type(self).calls += 1
+            return "   "
 
-    process.communicate = never_finishes  # type: ignore[method-assign]
+    destination = FakeDestination()
 
-    async def hanging_exec(*argv: str, **kwargs: Any) -> FakeProcess:
-        return process
+    async def stateful_store(source: Path, *, name: str) -> str:
+        return StatefulLocator(" https://files.example/clip ")
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", hanging_exec)
+    destination.store = stateful_store  # type: ignore[method-assign]
     clip = make_clip(tmp_path, size_bytes=2 * 1024 * 1024)
-    delivery = build_delivery(harness, max_chat_mb=1)
 
-    task = asyncio.create_task(delivery.deliver(clip, chat_id=42, caption="x"))
-    await asyncio.sleep(0.05)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    result = await build_delivery(harness, max_chat_mb=1).deliver(
+        clip,
+        chat_id=42,
+        caption="ignored",
+        overflow=ready(destination),
+    )
 
-    assert process.killed
+    assert isinstance(result, OverflowDelivery)
+    assert result.location == "https://files.example/clip"
+    assert StatefulLocator.calls == 0
 
 
-class TestShareName:
-    """The name is the share's only index — there is no retention, no listing UI."""
-
+class TestOverflowName:
     def test_it_sorts_by_date_and_greps_by_author_and_tweet(self, tmp_path: Path) -> None:
         clip = make_clip(
-            tmp_path, tweet_id="1234567890", uploader="someone", upload_date=date(2026, 8, 13)
+            tmp_path,
+            tweet_id="1234567890",
+            uploader="someone",
+            upload_date=date(2026, 8, 13),
         )
-        assert share_name(clip) == "2026-08-13-someone-1234567890.mp4"
+        assert overflow_name(clip) == "2026-08-13-someone-1234567890.mp4"
 
     def test_several_clips_from_one_tweet_do_not_overwrite_each_other(self, tmp_path: Path) -> None:
         clip = make_clip(tmp_path)
-        assert share_name(clip, index=2, total=2).endswith("-2.mp4")
+        assert overflow_name(clip, index=2, total=2).endswith("-2.mp4")
 
     def test_a_hostile_handle_cannot_escape_the_file_name(self, tmp_path: Path) -> None:
         clip = make_clip(tmp_path, uploader="../../etc/passwd")
-        name = share_name(clip)
+        name = overflow_name(clip)
         assert "/" not in name and ".." not in name
-
-
-class TestFailuresThatMustNotLookGeneric:
-    async def test_a_missing_rclone_is_reported_as_a_share_problem(
-        self, harness: BotHarness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # The likeliest first failure on a fresh server: rclone absent from the
-        # supervisor's PATH. It must not surface as the generic "download
-        # failed", which sends the operator looking in the wrong place.
-        async def missing(*argv: str, **kwargs: Any) -> FakeProcess:
-            raise FileNotFoundError(2, "No such file or directory", "rclone")
-
-        monkeypatch.setattr(asyncio, "create_subprocess_exec", missing)
-        clip = make_clip(tmp_path, size_bytes=2 * 1024 * 1024)
-
-        with pytest.raises(ShareUnavailable, match="rclone"):
-            await build_delivery(harness, max_chat_mb=1).deliver(clip, chat_id=42, caption="x")
 
 
 class TestUploadDetails:
     async def test_an_overlong_caption_does_not_cost_a_downloaded_clip(
         self, harness: BotHarness, tmp_path: Path
     ) -> None:
-        # Tweet URLs carry arbitrarily long tracking tails, aiogram does not
-        # check the length, and Telegram answers 400 — losing a clip that
-        # downloaded perfectly well.
         clip = make_clip(tmp_path, size_bytes=1024)
         caption = "https://x.com/a/status/1?ref=" + "z" * 2000
 
-        await build_delivery(harness).deliver(clip, chat_id=42, caption=caption)
+        await build_delivery(harness).deliver(
+            clip,
+            chat_id=42,
+            caption=caption,
+            overflow=OFF,
+        )
 
         sent = harness.session.calls_of(SendVideo)[0]
         assert sent.caption is not None
@@ -199,49 +233,31 @@ class TestUploadDetails:
     async def test_uploads_get_their_own_generous_timeout(
         self, harness: BotHarness, tmp_path: Path
     ) -> None:
-        # The session-wide default is 15s, which tens of megabytes through a
-        # proxy will never meet.
         clip = make_clip(tmp_path, size_bytes=1024)
 
-        await build_delivery(harness).deliver(clip, chat_id=42, caption="x")
+        await build_delivery(harness).deliver(
+            clip,
+            chat_id=42,
+            caption="x",
+            overflow=OFF,
+        )
 
         assert harness.session.timeout_of(SendVideo) == 600
 
-    async def test_the_copy_leaves_no_partial_file_on_a_share_nobody_prunes(
-        self, harness: BotHarness, tmp_path: Path, rclone_calls: list[list[str]]
-    ) -> None:
-        clip = make_clip(tmp_path, size_bytes=2 * 1024 * 1024)
-
-        await build_delivery(harness, max_chat_mb=1).deliver(clip, chat_id=42, caption="x")
-
-        assert "--inplace" in rclone_calls[0]
-
 
 class TestCaptionLength:
-    """Telegram counts a caption in UTF-16 code units, Python counts characters."""
-
     def test_a_plain_caption_is_left_alone(self) -> None:
         assert _fit_caption("https://x.com/a/status/1") == "https://x.com/a/status/1"
 
     def test_an_emoji_heavy_caption_is_measured_the_way_telegram_measures_it(self) -> None:
-        # 600 emoji are 600 characters to Python but 1200 units to Telegram —
-        # under the limit by one count, over it by the one that matters, and
-        # the 400 that follows costs a clip that downloaded perfectly well.
-        caption = "😀" * 600
-
-        fitted = _fit_caption(caption)
-
+        fitted = _fit_caption("😀" * 600)
         assert len(fitted.encode("utf-16-le")) // 2 <= 1024
 
     def test_trimming_never_splits_a_surrogate_pair(self) -> None:
         fitted = _fit_caption("😀" * 600)
-
-        # A caption cut between the halves of a pair is rejected outright, and
-        # re-encoding is what would reveal it.
         assert fitted.encode("utf-16-le").decode("utf-16-le") == fitted
 
     def test_a_long_ascii_caption_is_trimmed_to_the_limit(self) -> None:
         fitted = _fit_caption("z" * 5000)
-
         assert len(fitted) <= 1024
         assert fitted.endswith("…")

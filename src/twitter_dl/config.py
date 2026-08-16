@@ -1,16 +1,21 @@
 """Application configuration, loaded from the environment / ``.env`` file."""
 
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Everything the bot needs to know, and nothing it can discover itself."""
 
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", populate_by_name=True
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_nested_delimiter="__",
+        extra="ignore",
+        populate_by_name=True,
     )
 
     bot_token: str = Field(
@@ -64,27 +69,15 @@ class Settings(BaseSettings):
         alias="DOWNLOAD_DIR",
         description="Scratch space; one subdirectory per request, removed when it finishes",
     )
-    rclone_binary: str = Field(
-        default="rclone",
-        alias="RCLONE_BINARY",
-        description="rclone executable used to copy oversized clips to the share",
+    overflow_adapters: Annotated[dict[str, object], NoDecode] = Field(
+        default_factory=dict,
+        alias="OVERFLOW_ADAPTERS",
+        description="Adapter id to full module:create factory path",
     )
-    rclone_config: Path | None = Field(
-        default=None,
-        alias="RCLONE_CONFIG",
-        description=(
-            "rclone config file holding the share's remote; unset uses rclone's own default"
-        ),
-    )
-    rclone_remote: str = Field(
-        default="keenetic:KeeneticShared/twitter-dl",
-        alias="RCLONE_REMOTE",
-        description="rclone destination (remote plus directory) for oversized clips",
-    )
-    share_path_prefix: str = Field(
-        default=r"\\192.168.1.1\KeeneticShared\twitter-dl",
-        alias="SHARE_PATH_PREFIX",
-        description="How the share is named to a human; prepended to the file name in replies",
+    overflow_default: str = Field(
+        default="none",
+        alias="OVERFLOW_DEFAULT",
+        description="Overflow Adapter selected when no persisted Owner choice exists",
     )
     queue_limit: int = Field(
         default=5,
@@ -100,12 +93,12 @@ class Settings(BaseSettings):
         default=50,
         alias="MAX_TG_VIDEO_MB",
         description=(
-            "Upload ceiling that splits chat delivery from share delivery. 50 is the Bot API "
+            "Upload ceiling that splits Chat from Overflow delivery. 50 is the Bot API "
             "limit; raising it only makes sense behind a local Bot API server"
         ),
     )
 
-    @field_validator("cookies_file", "rclone_config", mode="before")
+    @field_validator("cookies_file", mode="before")
     @classmethod
     def _empty_path_means_unset(cls, value: object) -> object:
         """An empty value is "not configured", not the current directory.
@@ -117,6 +110,20 @@ class Settings(BaseSettings):
         """
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("overflow_adapters", mode="before")
+    @classmethod
+    def _malformed_overflow_mapping_is_an_adapter_problem(cls, value: object) -> object:
+        """Keep an optional feature's malformed base variable from killing the bot.
+
+        Documented configuration uses one nested ``OVERFLOW_ADAPTERS__ID`` line
+        per Adapter. If somebody sets the base variable instead, preserve it as
+        a broken factory entry so Menu reports the problem while Chat delivery
+        remains available.
+        """
+        if isinstance(value, str):
+            return {"configuration": value} if value.strip() else {}
         return value
 
     @property
@@ -137,14 +144,20 @@ class Settings(BaseSettings):
 
     @property
     def max_tg_video_bytes(self) -> int:
-        """The chat/share threshold in bytes."""
+        """The Chat/Overflow threshold in bytes."""
         return self.max_tg_video_mb * 1024 * 1024
+
+    @property
+    def overflow_state_file(self) -> Path:
+        """The Owner's persisted selection, next to the writable scratch directories."""
+        return self.download_dir / ".overflow-destination"
 
     @model_validator(mode="after")
     def _fail_fast_on_derived_values(self) -> "Settings":
-        """Parse and range-check everything the properties above parse lazily, so a
-        typo in the env file kills startup instead of surfacing on someone's first
-        link — or, worse, on the first oversized clip hours later.
+        """Parse and range-check core settings that cannot be degraded safely.
+
+        Optional Overflow Adapter errors are deliberately handled by its catalog
+        instead; they must not take Chat delivery down with them.
         """
         _ = self.allowed_ids
         if self.queue_limit < 1:

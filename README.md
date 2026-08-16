@@ -17,8 +17,11 @@ real account, one uplink.
 - Several links in one message, and several clips in one tweet, are all handled
   in turn.
 - A clip up to 50 MB (the Bot API ceiling) arrives in the chat, captioned with
-  the tweet's link. Anything larger is copied by `rclone` to the home SMB share,
-  and the chat gets the path to it.
+  the tweet's link. Delivery of larger clips is optional: the owner can switch
+  between the configured Overflow Adapters from the bot's Menu.
+- Built-in Overflow Adapters cover an SMB Share and Yandex Disk through
+  `rclone`; a deployment may enable neither, either or both. A custom Adapter is
+  one importable `module:create` factory plus its environment configuration.
 - The queue is strictly sequential: there is one uplink, and parallelism would
   only make progress reporting lie.
 - Strangers get silence: the bot does not even confirm that it exists.
@@ -26,8 +29,8 @@ real account, one uplink.
 ## Stack
 
 Python 3.12, aiogram 3 (long polling), yt-dlp used as a library,
-pydantic-settings, uv. No database whatsoever: the state is the environment,
-the cookies and the log.
+pydantic-settings, uv. No database: the only durable application value is the
+Owner's selected Overflow Adapter in one small state file.
 
 ## Development
 
@@ -46,6 +49,39 @@ uv run ruff check .
 uv run ruff format .
 uv run mypy src tests
 ```
+
+### Adding an Overflow Adapter
+
+Create an importable module whose destination inherits the fixed interface:
+
+```python
+from pathlib import Path
+
+from twitter_dl.services.overflow import OverflowDestination
+
+
+class MyDestination(OverflowDestination):
+    label = "My storage"
+
+    # Store source and return the non-empty locator shown in chat.
+    async def store(self, source: Path, *, name: str) -> str: ...
+
+
+def create() -> MyDestination:
+    return MyDestination()
+```
+
+The module owns and validates its prefixed environment settings, like the
+built-ins under `src/twitter_dl/adapters/`.
+
+Enable the factory with one full import path; Menu discovers it at startup:
+
+```sh
+OVERFLOW_ADAPTERS__MY_STORAGE=my_package.my_adapter:create
+```
+
+A missing factory or invalid settings mark only that Adapter unavailable. They
+do not prevent the bot or Chat delivery from starting.
 
 `requirements.txt` is generated from `uv.lock` and must agree with it (the
 server has no `uv`; it installs with pip):
@@ -71,11 +107,15 @@ is only ever exercised by a person. With a test token:
 3. A tweet with no video → "That tweet has no video in it".
 4. Text with no links at all → "No tweet link found".
 5. Six links at once → the sixth is refused with "Queue is full".
-6. `MAX_TG_VIDEO_MB=1` → the share route: the file lands there and the chat gets
-   the path.
-7. A broken `COOKIES_FILE` plus an NSFW tweet → one alert to the owner, a polite
+6. `MAX_TG_VIDEO_MB=1` with Overflow delivery off → an explicit size-limit
+   verdict and no complete oversized download.
+7. Enable the Share Adapter → the file lands there and the chat gets the path;
+   enable Yandex Disk → the chat gets a working public link.
+8. Remove or break the selected Adapter → small clips still arrive, and a large
+   one names the missing or misconfigured Overflow destination.
+9. A broken `COOKIES_FILE` plus an NSFW tweet → one alert to the owner, a polite
    refusal to whoever asked.
-8. Proxy switched off for a minute → "Can't reach X right now", and the bot
+10. Proxy switched off for a minute → "Can't reach X right now", and the bot
    neither hangs nor dies.
 
 ## Operations

@@ -61,9 +61,28 @@ install -m 600 -o twitterdl cookies.txt /usr/local/etc/twitter-dl-cookies.txt
 ```
 
 The minimum the env file must carry: `TELEGRAM_BOT_TOKEN`, `OWNER_ID`,
-`TELEGRAM_PROXY=http://127.0.0.1:1080`, `COOKIES_FILE`, `RCLONE_CONFIG`.
+`TELEGRAM_PROXY=http://127.0.0.1:1080`, and `COOKIES_FILE`. Overflow delivery
+is optional; without any `OVERFLOW_ADAPTERS__*` entries the bot remains fully
+functional for clips within Telegram's limit.
 
-### The rclone config: a copy of its own, not a shared one
+### Optional Overflow Adapters
+
+The Owner selects the active Adapter with Menu → Overflow delivery. The choice
+survives restarts in `/var/tmp/twitter-dl/.overflow-destination`; it does not
+need database backup.
+
+Each configured key maps a stable id to a full factory path:
+
+```sh
+OVERFLOW_DEFAULT=none
+OVERFLOW_ADAPTERS__SHARE=twitter_dl.adapters.share:create
+OVERFLOW_ADAPTERS__YANDEX_DISK=twitter_dl.adapters.yandex_disk:create
+```
+
+Missing factories and invalid Adapter settings do not prevent startup. They
+appear as unavailable in Menu; Chat delivery continues to work.
+
+#### The rclone config: a copy of its own, not a shared one
 
 The `backup` role's config (`/usr/local/etc/backup/rclone.conf`) is out of the
 bot's reach: the directory itself is root-only, and loosening the permissions is
@@ -81,6 +100,41 @@ su -m twitterdl -c 'rclone --config /usr/local/etc/twitter-dl-rclone.conf mkdir 
 
 If the share's host or name ever changes, this copy has to be updated by hand —
 it deliberately lives outside ansible.
+
+Enable the Share Adapter in `/usr/local/etc/twitter-dl.env`:
+
+```sh
+OVERFLOW_ADAPTERS__SHARE=twitter_dl.adapters.share:create
+SHARE_RCLONE_CONFIG=/usr/local/etc/twitter-dl-rclone.conf
+SHARE_RCLONE_REMOTE=keenetic:KeeneticShared/twitter-dl
+SHARE_PATH_PREFIX='\\192.168.1.1\KeeneticShared\twitter-dl'
+```
+
+#### Yandex Disk
+
+rclone already includes a Yandex Disk backend, so the bot needs no additional
+Python dependency. Configure a remote in the bot-owned config; the interactive
+wizard explains how to authorize from another machine when the jail has no
+browser:
+
+```sh
+su -m twitterdl -c 'rclone --config /usr/local/etc/twitter-dl-rclone.conf config'
+su -m twitterdl -c 'rclone --config /usr/local/etc/twitter-dl-rclone.conf mkdir yandex:twitter-dl'
+```
+
+Unlike the guest Share config, the Yandex remote contains an OAuth token: keep
+the file owned by `twitterdl` with mode `600` and keep its recovery copy in
+KeePass. Then enable the Adapter:
+
+```sh
+OVERFLOW_ADAPTERS__YANDEX_DISK=twitter_dl.adapters.yandex_disk:create
+YANDEX_DISK_RCLONE_CONFIG=/usr/local/etc/twitter-dl-rclone.conf
+YANDEX_DISK_RCLONE_REMOTE=yandex:twitter-dl
+```
+
+The Adapter runs `rclone copyto` followed by `rclone link`. The returned link is
+public and has no automatic retention; removing or unpublishing it is an Owner
+operation.
 
 ## rc.d
 

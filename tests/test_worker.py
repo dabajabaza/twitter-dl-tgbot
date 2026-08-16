@@ -16,7 +16,7 @@ from twitter_dl.bot import texts
 from twitter_dl.bot.progress import ProgressReporter
 from twitter_dl.config import Settings
 from twitter_dl.domain import Clip, ProgressCallback
-from twitter_dl.errors import AuthExpired, NoVideoInTweet, TweetUnavailable
+from twitter_dl.errors import AuthExpired, DownloadTooLarge, NoVideoInTweet, TweetUnavailable
 from twitter_dl.runtime.worker import (
     OwnerAlerts,
     Request,
@@ -24,7 +24,8 @@ from twitter_dl.runtime.worker import (
     RequestWorker,
 )
 from twitter_dl.services.cookies import CookieSession
-from twitter_dl.services.delivery import ChatDelivery, DeliveryResult, ShareDelivery
+from twitter_dl.services.delivery import ChatDelivery, DeliveryResult, OverflowDelivery
+from twitter_dl.services.overflow import OverflowChoice, OverflowDestination, OverflowState
 
 TWEET = "https://x.com/someone/status/1234567890"
 
@@ -41,11 +42,18 @@ class FakeDownloader:
         self._error = error
         self._delay = delay
         self.destinations: list[Path] = []
+        self.max_bytes: list[int | None] = []
 
     async def download(
-        self, url: str, dest: Path, *, on_progress: ProgressCallback | None = None
+        self,
+        url: str,
+        dest: Path,
+        *,
+        on_progress: ProgressCallback | None = None,
+        max_bytes: int | None = None,
     ) -> list[Clip]:
         self.destinations.append(dest)
+        self.max_bytes.append(max_bytes)
         if on_progress is not None:
             on_progress("50%")
         if self._delay:
@@ -58,12 +66,19 @@ class FakeDownloader:
 class FakeDelivery:
     def __init__(self, *, result: DeliveryResult | None = None) -> None:
         self._result = result
-        self.delivered: list[tuple[Clip, str, int, int]] = []
+        self.delivered: list[tuple[Clip, str, OverflowChoice, int, int]] = []
 
     async def deliver(
-        self, clip: Clip, *, chat_id: int, caption: str, index: int = 1, total: int = 1
+        self,
+        clip: Clip,
+        *,
+        chat_id: int,
+        caption: str,
+        overflow: OverflowChoice,
+        index: int = 1,
+        total: int = 1,
     ) -> DeliveryResult:
-        self.delivered.append((clip, caption, index, total))
+        self.delivered.append((clip, caption, overflow, index, total))
         return self._result or ChatDelivery(size_bytes=clip.path.stat().st_size)
 
 
@@ -84,9 +99,36 @@ def build_worker(
     )
 
 
-def make_request(harness: BotHarness, url: str = TWEET) -> Request:
+class ReadyDestination(OverflowDestination):
+    label = "Test"
+
+    async def store(self, source: Path, *, name: str) -> str:
+        return name
+
+
+OFF = OverflowChoice(adapter_id="none", label="Off", state=OverflowState.OFF)
+READY = OverflowChoice(
+    adapter_id="test",
+    label="Test",
+    state=OverflowState.READY,
+    destination=ReadyDestination(),
+)
+
+
+def make_request(
+    harness: BotHarness,
+    url: str = TWEET,
+    *,
+    overflow: OverflowChoice = OFF,
+) -> Request:
     reporter = ProgressReporter(harness.bot, chat_id=OWNER_ID, message_id=777, min_interval=0.0)
-    return Request(url=url, chat_id=OWNER_ID, user_id=OWNER_ID, reporter=reporter)
+    return Request(
+        url=url,
+        chat_id=OWNER_ID,
+        user_id=OWNER_ID,
+        reporter=reporter,
+        overflow=overflow,
+    )
 
 
 @asynccontextmanager
@@ -144,9 +186,51 @@ async def test_a_clip_is_delivered_and_the_status_message_steps_aside(
         harness.queue.submit(make_request(harness))
         await drain(harness.queue)
 
-    assert [caption for _, caption, _, _ in delivery.delivered] == [TWEET]
+    assert [caption for _, caption, _, _, _ in delivery.delivered] == [TWEET]
     # The video itself is the answer, so the progress message is removed.
     assert harness.session.calls_of(DeleteMessage)
+
+
+async def test_a_request_without_working_overflow_caps_the_download_early(
+    harness: BotHarness, settings: Settings
+) -> None:
+    downloader = FakeDownloader()
+    worker = build_worker(harness, settings, downloader=downloader)
+
+    async with running(worker):
+        harness.queue.submit(make_request(harness, overflow=OFF))
+        await drain(harness.queue)
+
+    assert downloader.max_bytes == [settings.max_tg_video_bytes]
+
+
+async def test_a_request_with_working_overflow_keeps_best_quality_unbounded(
+    harness: BotHarness, settings: Settings
+) -> None:
+    downloader = FakeDownloader()
+    worker = build_worker(harness, settings, downloader=downloader)
+
+    async with running(worker):
+        harness.queue.submit(make_request(harness, overflow=READY))
+        await drain(harness.queue)
+
+    assert downloader.max_bytes == [None]
+
+
+async def test_crossing_the_limit_with_overflow_off_gets_an_explicit_verdict(
+    harness: BotHarness, settings: Settings
+) -> None:
+    error = DownloadTooLarge(
+        limit_bytes=settings.max_tg_video_bytes,
+        observed_bytes=settings.max_tg_video_bytes + 1,
+    )
+    worker = build_worker(harness, settings, downloader=FakeDownloader(error=error))
+
+    async with running(worker):
+        harness.queue.submit(make_request(harness, overflow=OFF))
+        await drain(harness.queue)
+
+    assert texts.OVERFLOW_DISABLED.format(max_mb=settings.max_tg_video_mb) in edited_texts(harness)
 
 
 async def test_every_clip_of_a_tweet_is_delivered_and_numbered(
@@ -165,20 +249,48 @@ async def test_every_clip_of_a_tweet_is_delivered_and_numbered(
         harness.queue.submit(make_request(harness))
         await drain(harness.queue)
 
-    assert [(index, total) for _, _, index, total in delivery.delivered] == [(1, 2), (2, 2)]
+    assert [(index, total) for _, _, _, index, total in delivery.delivered] == [
+        (1, 2),
+        (2, 2),
+    ]
 
 
-async def test_an_oversized_clip_is_reported_by_its_path_on_the_share(
-    harness: BotHarness, settings: Settings
+async def test_final_size_refusal_delivers_none_of_a_multi_clip_request(
+    harness: BotHarness, tmp_path: Path
 ) -> None:
-    share = ShareDelivery(size_bytes=120 * 1024 * 1024, display_path=r"\\router\share\clip.mp4")
-    worker = build_worker(harness, settings, delivery=FakeDelivery(result=share))
+    settings = build_settings(tmp_path, max_tg_video_mb=1)
+    downloader = FakeDownloader(
+        clips=lambda dest: [
+            make_clip(dest, name="small.mp4", size_bytes=1),
+            make_clip(dest, name="large.mp4", size_bytes=2 * 1024 * 1024),
+        ]
+    )
+    delivery = FakeDelivery()
+    worker = build_worker(harness, settings, downloader=downloader, delivery=delivery)
 
     async with running(worker):
-        harness.queue.submit(make_request(harness))
+        harness.queue.submit(make_request(harness, overflow=OFF))
         await drain(harness.queue)
 
-    assert any(share.display_path in text for text in edited_texts(harness))
+    assert delivery.delivered == []
+    assert texts.OVERFLOW_DISABLED.format(max_mb=1) in edited_texts(harness)
+
+
+async def test_an_oversized_clip_is_reported_by_its_overflow_locator(
+    harness: BotHarness, settings: Settings
+) -> None:
+    overflow = OverflowDelivery(
+        size_bytes=120 * 1024 * 1024,
+        adapter_label="Share",
+        location=r"\\router\share\clip.mp4",
+    )
+    worker = build_worker(harness, settings, delivery=FakeDelivery(result=overflow))
+
+    async with running(worker):
+        harness.queue.submit(make_request(harness, overflow=READY))
+        await drain(harness.queue)
+
+    assert any(overflow.location in text for text in edited_texts(harness))
     # The path IS the result, so nothing is deleted.
     assert not harness.session.calls_of(DeleteMessage)
 
@@ -420,13 +532,19 @@ class TestTheDeadlineBoundsWorkNotTheVerdict:
     ) -> None:
         # The clip is delivered; only the closing status update is left. If
         # that update runs under the deadline, its cancellation freezes the
-        # message on "Uploading…" forever — and on the share route takes the
-        # path with it, which is the share's only index.
+        # message on "Uploading…" forever — and on an Overflow route takes the
+        # Adapter's only returned locator with it.
         settings = build_settings(tmp_path, download_timeout_s=1)
         worker = build_worker(harness, settings, downloader=FakeDownloader(delay=0.8))
 
         reporter = SlowFinishReporter(harness.bot, chat_id=OWNER_ID, message_id=777)
-        request = Request(url=TWEET, chat_id=OWNER_ID, user_id=OWNER_ID, reporter=reporter)
+        request = Request(
+            url=TWEET,
+            chat_id=OWNER_ID,
+            user_id=OWNER_ID,
+            reporter=reporter,
+            overflow=OFF,
+        )
 
         async with running(worker):
             harness.queue.submit(request)

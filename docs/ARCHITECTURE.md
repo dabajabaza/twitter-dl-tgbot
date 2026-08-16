@@ -165,27 +165,33 @@ class.
 
 ---
 
-## D7. Size decides where a clip goes
+## D7. Size decides between Chat and the selected Overflow destination
 
 **Context.** The Bot API will not let a bot upload a file larger than 50 MB.
 Tweets from Premium accounts can run for an hour. Standing up a local Bot API
 server (a 2 GB limit) means another daemon on an old laptop for a rare case.
 
-**Decision.** Always download the best quality. A clip under the ceiling goes to
-the chat, captioned with the tweet's link. A clip over it is copied by `rclone`
-to the router's SMB share, and the chat gets a human-readable path. The answer
-is the same for everyone: telling "on the LAN" from "a guest elsewhere" is not
-worth the code — the case is rare, and an honest answer beats silently degrading
-quality.
+**Decision.** A clip under the ceiling goes to the chat, captioned with the
+tweet's link. A clip over it goes through the `OverflowDestination` Adapter the
+Owner selected for the whole bot. The built-ins are an rclone-backed SMB Share
+and Yandex Disk with a public link; `none` disables Overflow delivery. The
+selection is captured when a Request enters the queue, so changing Menu cannot
+redirect work already accepted.
 
-**Consequences.** The file name on the share (`<date>-<author>-<id>.mp4`) is its
-only index: there is no retention and no listing. Hence sortable by date and
-greppable by author. The metadata comes from X, so the name is sanitised hard:
-everything but letters, digits, `_` and `-` is collapsed — dots included, so
-that a `../..` in an account name means nothing once pasted into a path.
+When no working Adapter is selected, yt-dlp is stopped as soon as an exact
+announced size or received-byte counter crosses the Chat ceiling. X commonly
+uses HLS, whose final merged size is not reliably known in advance; therefore a
+final file-size check remains authoritative. A multi-Clip Request is atomic on
+this early-refusal path: the first overflow ends the whole Request.
 
-**Revisit when** large videos become a common case — then, a local Bot API
-server.
+**Consequences.** The common external file name
+(`<date>-<author>-<id>.mp4`) is sortable and greppable. X controls its metadata,
+so everything but letters, digits, `_` and `-` is collapsed — dots included,
+so a `../..` in an account name means nothing at any destination. Share files
+and Yandex public links have no automatic retention.
+
+**Revisit when** large videos become common enough to justify a local Bot API
+server, or hard byte accounting requires replacing yt-dlp's downloader.
 
 ---
 
@@ -222,35 +228,39 @@ thread's life.
 (`_announce`) was moved outside `asyncio.timeout`: by then the clips are
 delivered, the work is done, and there is nothing left to cancel. While it was
 inside, a deadline expiring on that very last edit cancelled the edit itself —
-the message froze on "Uploading…" forever, and on the share route it took the
-path to the file with it, i.e. the share's only index (D7). The invariant "the
+the message froze on "Uploading…" forever, and on an Overflow route it took the
+Adapter's only returned locator with it (D7). The invariant "the
 status always reaches a final state" is covered by a test that fails if the
 verdict is put back under the deadline.
 
 ---
 
-## D9. There is no state at all — no database, no file
+## D9. One persisted setting, still no database or FSM state
 
 **Context.** The neighbours have SQLite, alembic and a two-layer backup. Looking
 at what of that is needed here: the user list is static (D1), the queue is
 ephemeral, and nobody needs a history of requests.
 
-**Decision.** No database. The process's state is the in-memory queue and the
-"the owner has already been told about the cookies" flag. aiogram's FSM storage
-is a null object too (`bot/storage.py`): there are no dialogs, and the default
-`MemoryStorage` would create a record for everyone who writes in — strangers
-included, because aiogram resolves the FSM context in a middleware registered
-inside the `Dispatcher` constructor, i.e. **before** any gate of ours. That was
-unbounded memory growth driven by the very people the bot refuses to answer.
+**Decision.** No database. The sole durable application value is the Owner's
+active Overflow Adapter id, atomically replaced in
+`DOWNLOAD_DIR/.overflow-destination`; if the file does not exist,
+`OVERFLOW_DEFAULT` applies. Queue contents and alert deduplication stay in
+memory. Recovery from a non-regular state path uses a transient
+`.overflow-destination.recovery` marker, so a crash between quarantine and
+replacement remains visibly misconfigured instead of looking like first startup.
+aiogram's FSM storage remains a null object (`bot/storage.py`): Menu is
+one command plus one callback, not a multi-step dialog, and the default
+`MemoryStorage` would still create a record for every stranger before the
+access gate runs.
 
-**Consequences.** A restart is always clean, there is nothing to migrate, and
-nothing to add to the backup role (`backup_dumps` is left alone; sanoid
-snapshots the jail's dataset anyway). The price is that a restart loses the
-queue; accepted deliberately, since "send the link again" is cheaper than a
-persistent queue with recovery.
+**Consequences.** Restarts preserve the one choice a person expects to persist,
+without migrations or a database. A removed or broken Adapter id is preserved
+rather than silently changed: Chat delivery keeps working and Menu asks the
+Owner to select another. The queue is still lost on restart; "send the link
+again" remains cheaper than persistent recovery.
 
-**Revisit when** statistics, or "I have already downloaded this tweet"
-deduplication, become necessary.
+**Revisit when** a second durable value, statistics, or "I have already
+downloaded this tweet" deduplication becomes necessary.
 
 ---
 
@@ -259,8 +269,9 @@ deduplication, become necessary.
 **Context.** Replies quote things that do not belong to the bot: account
 handles, yt-dlp messages, Windows paths full of backslashes.
 
-**Decision.** No HTML or Markdown parse mode. Every string lives in
-`bot/texts.py`, in English.
+**Decision.** No HTML or Markdown parse mode. Every bot-owned string lives in
+`bot/texts.py`, in English. Adapter labels and returned locators belong to the
+Adapter that supplies them.
 
 **Consequences.** There is nothing to escape and no markup to break. There is no
 bold text, and the UX does not suffer for it. The rule is enforced by a test
@@ -274,17 +285,23 @@ bold text, and the UX does not suffer for it. The rule is enforced by a test
 a database session per request, a unit of work, scope collapsing
 (`_collapse_dishka_scopes`).
 
-**Decision.** Here there is not a single request-scoped dependency, because
-there is no database (D9). The singletons (`Settings`, `Bot`, `RequestQueue`,
-the downloader, the delivery route) are assembled by hand in
-`__main__._run_bot`, and handlers receive what they need through aiogram's
-workflow data (`dp["queue"]`, `dp["settings"]`).
+**Decision.** There is no container. The singletons (`Settings`, `Bot`,
+`RequestQueue`, the downloader, the delivery route, and the Overflow catalog)
+are assembled by hand in `__main__._run_bot`; handlers receive them through
+aiogram's workflow data. Each configured `module:create` factory constructs one
+optional `OverflowDestination` Adapter and owns its prefixed environment
+settings. Import or configuration failures become visible catalog states and
+cannot stop Chat delivery or bot startup
+([ADR 0001](adr/0001-configured-overflow-adapters.md)).
 
 **Consequences.** One dependency fewer, and a whole class of scope traps gone.
-The seams tests need are provided by the `Downloader` and `Delivery` protocols,
-declared in `runtime/worker.py` — where they are consumed.
+The worker's seams remain the `Downloader` and `Delivery` protocols, declared
+where they are consumed. `OverflowDestination` is a narrower seam inside
+`ClipDelivery`; Menu is generated from loaded factories without a central
+Adapter registry.
 
-**Revisit when** per-request state appears (that is, if D9 is ever reversed).
+**Revisit when** dependencies acquire real request lifetimes rather than an
+immutable selection captured on a Request.
 
 ---
 
@@ -366,7 +383,7 @@ taxonomy files under `NoVideoInTweet`.
 
 **Consequences.** A tweet linking to a video on someone else's site honestly
 answers "that tweet has no video in it", instead of delivering that stranger's
-video captioned with the tweet and filing it on the share under their metadata.
+video captioned with the tweet and filing it externally under their metadata.
 It also closes the path out of X through the owner's proxy: previously the
 author of a tweet — a stranger — effectively chose where the bot would go. The
 restriction is covered by a test.

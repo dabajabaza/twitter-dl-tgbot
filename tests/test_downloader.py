@@ -11,6 +11,7 @@ from yt_dlp.utils import DownloadError
 from twitter_dl.errors import (
     AuthExpired,
     DownloadFailed,
+    DownloadTooLarge,
     NetworkUnavailable,
     NoVideoInTweet,
     TweetUnavailable,
@@ -86,6 +87,174 @@ class TestProgress:
         assert module._format_progress({"status": "finished"}) is None
 
 
+class TestDownloadCeiling:
+    async def test_a_known_oversized_stream_is_refused_before_its_body(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        downloader = module.YtDlpDownloader()
+
+        def fake_extract(
+            url: str,
+            dest: Path,
+            hook: Any,
+            abandoned: Any,
+            max_bytes: int | None,
+            limit_hit: list[int],
+        ) -> Any:
+            options = downloader._options(
+                dest,
+                hook,
+                max_bytes=max_bytes,
+                limit_hit=limit_hit,
+            )
+            assert options["max_filesize"] == 50
+            options["match_filter"]({"filesize": 51}, incomplete=False)
+
+        monkeypatch.setattr(downloader, "_extract", fake_extract)
+
+        with pytest.raises(DownloadTooLarge) as raised:
+            await downloader.download(TWEET, tmp_path, max_bytes=50)
+        assert raised.value.observed_bytes == 51
+
+    async def test_an_unknown_stream_is_stopped_as_soon_as_received_bytes_cross_the_limit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        downloader = module.YtDlpDownloader()
+
+        def fake_extract(
+            url: str,
+            dest: Path,
+            hook: Any,
+            abandoned: Any,
+            max_bytes: int | None,
+            limit_hit: list[int],
+        ) -> Any:
+            hook({"status": "downloading", "downloaded_bytes": 51})
+
+        monkeypatch.setattr(downloader, "_extract", fake_extract)
+
+        with pytest.raises(DownloadTooLarge):
+            await downloader.download(TWEET, tmp_path, max_bytes=50)
+
+    async def test_separate_streams_share_one_received_byte_budget(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        downloader = module.YtDlpDownloader()
+
+        def fake_extract(
+            url: str,
+            dest: Path,
+            hook: Any,
+            abandoned: Any,
+            max_bytes: int | None,
+            limit_hit: list[int],
+        ) -> Any:
+            hook(
+                {
+                    "status": "downloading",
+                    "info_dict": {"id": "clip-1", "format_id": "video"},
+                    "filename": "video.part",
+                    "downloaded_bytes": 40,
+                }
+            )
+            hook(
+                {
+                    "status": "downloading",
+                    "info_dict": {"id": "clip-1", "format_id": "audio"},
+                    "filename": "audio.part",
+                    "downloaded_bytes": 11,
+                }
+            )
+
+        monkeypatch.setattr(downloader, "_extract", fake_extract)
+
+        with pytest.raises(DownloadTooLarge) as raised:
+            await downloader.download(TWEET, tmp_path, max_bytes=50)
+        assert raised.value.observed_bytes == 51
+
+    async def test_each_clip_has_its_own_received_byte_budget(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        downloader = module.YtDlpDownloader()
+        first = tmp_path / "first.mp4"
+        second = tmp_path / "second.mp4"
+        first.write_bytes(b"1")
+        second.write_bytes(b"2")
+
+        def fake_extract(
+            url: str,
+            dest: Path,
+            hook: Any,
+            abandoned: Any,
+            max_bytes: int | None,
+            limit_hit: list[int],
+        ) -> Any:
+            hook(
+                {
+                    "status": "downloading",
+                    "info_dict": {"id": "clip-1", "format_id": "video"},
+                    "downloaded_bytes": 30,
+                }
+            )
+            hook(
+                {
+                    "status": "downloading",
+                    "info_dict": {"id": "clip-2", "format_id": "video"},
+                    "downloaded_bytes": 30,
+                }
+            )
+            return {
+                "_type": "playlist",
+                "entries": [
+                    {
+                        "id": "clip-1",
+                        "requested_downloads": [{"filepath": str(first)}],
+                    },
+                    {
+                        "id": "clip-2",
+                        "requested_downloads": [{"filepath": str(second)}],
+                    },
+                ],
+            }
+
+        monkeypatch.setattr(downloader, "_extract", fake_extract)
+
+        clips = await downloader.download(TWEET, tmp_path, max_bytes=50)
+
+        assert len(clips) == 2
+
+    def test_exact_sizes_of_selected_streams_are_summed(self, tmp_path: Path) -> None:
+        hits: list[int] = []
+        options = module.YtDlpDownloader()._options(
+            tmp_path,
+            lambda status: None,
+            max_bytes=50,
+            limit_hit=hits,
+        )
+
+        with pytest.raises(module._Abandoned):
+            options["match_filter"](
+                {"requested_formats": [{"filesize": 40}, {"filesize": 20}]},
+                incomplete=False,
+            )
+        assert hits == [60]
+
+    def test_content_length_refusal_raises_the_typed_exit_immediately(self, tmp_path: Path) -> None:
+        hits: list[int] = []
+        options = module.YtDlpDownloader()._options(
+            tmp_path,
+            lambda status: None,
+            max_bytes=50,
+            limit_hit=hits,
+        )
+
+        content_length = 51
+        with pytest.raises(module._Abandoned):
+            _ = content_length > options["max_filesize"]
+
+        assert hits == [51]
+
+
 class TestClipsFromInfo:
     def _entry(self, path: Path, **overrides: Any) -> dict[str, Any]:
         entry: dict[str, Any] = {
@@ -149,7 +318,7 @@ class TestStayingOnX:
     def test_only_x_extractors_are_enabled(self, tmp_path: Path) -> None:
         # A tweet with no media but an outbound link makes the extractor follow
         # that link. Without this restriction the bot would fetch a stranger's
-        # video through the owner's proxy and file it on the share as theirs.
+        # video through the owner's proxy and file it externally as theirs.
         options = module.YtDlpDownloader()._options(tmp_path, lambda status: None)
 
         from yt_dlp import YoutubeDL
@@ -188,7 +357,7 @@ class TestCookiesAreACopy:
 class TestTweetIdentity:
     def test_the_id_from_the_link_wins_over_the_id_of_the_media(self, tmp_path: Path) -> None:
         # The extractor puts the media object's id in `id` and the tweet's own
-        # id in `display_id`. Names on the share are looked up from the link.
+        # id in `display_id`. External names are looked up from the link.
         video = tmp_path / "a.mp4"
         video.write_bytes(b"x")
         entry = {

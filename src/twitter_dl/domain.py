@@ -17,7 +17,7 @@ ProgressCallback = Callable[[str], None]
 
 @dataclass(frozen=True)
 class Clip:
-    """One downloaded video file, plus what is needed to name it on the share."""
+    """One downloaded video file, plus what is needed to name it externally."""
 
     path: Path
     tweet_id: str
