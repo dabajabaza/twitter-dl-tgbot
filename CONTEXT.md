@@ -40,12 +40,39 @@ state.
 **Chat delivery** — the Clip went to the chat. Possible while it fits under the
 Bot API ceiling (50 MB).
 
-**Share delivery** — the Clip did not fit and went to the *Share* instead; the
-chat gets its path.
+**Overflow delivery** — delivery outside Telegram when a Clip is too large for
+Chat delivery. It is optional: without an overflow destination, the first Clip
+known to exceed the ceiling ends the whole Request with an explicit size-limit
+verdict; no Clips from that Request are delivered.
+
+**Active overflow destination** — the destination the Owner selected for the
+whole bot. The selection survives restarts and applies only to new Requests;
+each Request keeps the destination that was active when it was accepted. A
+missing or misconfigured destination remains selected until the Owner chooses
+another: Chat delivery continues to work, while an oversized Request gets an
+explicit verdict naming the unavailable or misconfigured destination.
+
+**Missing overflow destination** — the Active overflow destination no longer
+exists in this bot. The Owner must select another destination; the bot does not
+fall back silently.
+
+**Misconfigured overflow destination** — the destination exists but lacks valid
+settings. This disables only Overflow delivery through that destination, not
+the bot or Chat delivery.
+
+**Overflow failure** — a correctly configured destination could not store one
+particular Clip. Unlike a missing or misconfigured destination, this is a
+failure of that delivery rather than a lasting configuration state.
+
+**Share delivery** — Overflow delivery to the *Share*; the chat gets its path.
 
 **Share** — the SMB directory on the home router (`KeeneticShared/twitter-dl`)
 where clips too large for Telegram are filed. There is no retention policy: the
 file name is its only index.
+
+**Yandex Disk delivery** — Overflow delivery to the Owner's Yandex Disk; the
+chat gets a public link that anyone holding it can open. The file and its link
+remain until the Owner removes them manually; there is no automatic retention.
 
 ## Access to X
 

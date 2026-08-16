@@ -14,6 +14,7 @@ from twitter_dl.bot.progress import ProgressReporter
 from twitter_dl.config import Settings
 from twitter_dl.runtime.worker import Request, RequestQueue
 from twitter_dl.services.links import extract_links
+from twitter_dl.services.overflow import OverflowCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,12 @@ def _hidden_urls(message: Message) -> Iterator[str]:
 
 @router.message(HasTweetLinks())
 async def enqueue_links(
-    message: Message, urls: list[str], bot: Bot, queue: RequestQueue, settings: Settings
+    message: Message,
+    urls: list[str],
+    bot: Bot,
+    queue: RequestQueue,
+    settings: Settings,
+    overflow_catalog: OverflowCatalog,
 ) -> None:
     user = message.from_user
     if user is None:
@@ -50,7 +56,13 @@ async def enqueue_links(
     for url in urls:
         status = await message.answer(texts.QUEUED)
         reporter = ProgressReporter(bot, chat_id=status.chat.id, message_id=status.message_id)
-        request = Request(url=url, chat_id=message.chat.id, user_id=user.id, reporter=reporter)
+        request = Request(
+            url=url,
+            chat_id=message.chat.id,
+            user_id=user.id,
+            reporter=reporter,
+            overflow=overflow_catalog.current,
+        )
         try:
             position = queue.submit(request)
         except asyncio.QueueFull:

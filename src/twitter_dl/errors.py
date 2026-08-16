@@ -40,5 +40,27 @@ class DownloadFailed(TwitterDlError):
     """yt-dlp failed in a way this taxonomy does not recognise."""
 
 
-class ShareUnavailable(TwitterDlError):
-    """The clip was downloaded but rclone could not put it on the share."""
+class DownloadTooLarge(TwitterDlError):
+    """A download crossed the Chat ceiling while no Overflow Adapter was usable."""
+
+    def __init__(self, *, limit_bytes: int, observed_bytes: int) -> None:
+        super().__init__(f"download crossed {limit_bytes} bytes at {observed_bytes} bytes")
+        self.limit_bytes = limit_bytes
+        self.observed_bytes = observed_bytes
+
+
+class OverflowUnavailable(TwitterDlError):
+    """The selected Overflow Adapter is off, missing, or misconfigured."""
+
+    def __init__(self, *, adapter_id: str, state: str) -> None:
+        super().__init__(f"overflow adapter {adapter_id!r} is {state}")
+        self.adapter_id = adapter_id
+        self.state = state
+
+
+class OverflowFailed(TwitterDlError):
+    """A configured Overflow Adapter failed one delivery."""
+
+    def __init__(self, *, adapter_id: str, detail: str) -> None:
+        super().__init__(detail)
+        self.adapter_id = adapter_id

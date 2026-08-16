@@ -10,8 +10,9 @@ from pathlib import Path
 import twitter_dl
 from tests.helpers.factories import build_settings
 from twitter_dl.__main__ import build_dispatcher
-from twitter_dl.bot.handlers import fallback, links, start
+from twitter_dl.bot.handlers import fallback, links, overflow, start
 from twitter_dl.runtime.worker import RequestQueue
+from twitter_dl.services.overflow import OverflowCatalog
 
 SRC = Path(twitter_dl.__file__).parent
 
@@ -80,7 +81,8 @@ def test_the_catch_all_router_is_registered_last(tmp_path: Path) -> None:
     # fallback matches any message, so anything registered after it would be
     # dead code — and the failure would be silent.
     settings = build_settings(tmp_path)
-    dp = build_dispatcher(settings, RequestQueue(settings.queue_limit))
+    catalog = OverflowCatalog({}, default="none", state_file=settings.overflow_state_file)
+    dp = build_dispatcher(settings, RequestQueue(settings.queue_limit), catalog)
     try:
         assert dp.sub_routers[-1] is fallback.router
     finally:
@@ -93,4 +95,9 @@ def test_the_test_harness_hands_back_every_router_production_uses() -> None:
     # attaches to a second Dispatcher and every later test dies on setup.
     from tests.conftest import _SHARED_ROUTERS
 
-    assert set(_SHARED_ROUTERS) == {start.router, links.router, fallback.router}
+    assert set(_SHARED_ROUTERS) == {
+        start.router,
+        overflow.router,
+        links.router,
+        fallback.router,
+    }

@@ -25,6 +25,7 @@ from twitter_dl.domain import Clip, ProgressCallback
 from twitter_dl.errors import (
     AuthExpired,
     DownloadFailed,
+    DownloadTooLarge,
     NetworkUnavailable,
     NoVideoInTweet,
     TweetUnavailable,
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 # Only X. A tweet with no media but an outbound link makes yt-dlp follow that
 # link (`url_result(expanded_url…)` in the extractor) and download whatever
 # lives there — so a link to an article would come back as somebody else's
-# video, captioned with the tweet and filed on the share under their name.
+# video, captioned with the tweet and filed externally under their name.
 _ALLOWED_EXTRACTORS = ["twitter.*"]
 
 # yt-dlp appends a generic "how to pass cookies" hint to *every* login-required
@@ -103,6 +104,25 @@ class _Abandoned(Exception):
     """Raised inside the worker thread to unwind yt-dlp after a request is dropped."""
 
 
+class _MaxFileSize(int):
+    """Turn yt-dlp's Content-Length comparison into our typed early exit."""
+
+    _limit_hit: list[int]
+
+    def __new__(cls, limit: int, limit_hit: list[int]) -> "_MaxFileSize":
+        value = super().__new__(cls, limit)
+        value._limit_hit = limit_hit
+        return value
+
+    def __lt__(self, observed: object) -> bool:
+        if isinstance(observed, int | float) and observed > int(self):
+            self._limit_hit.append(int(observed))
+            raise _Abandoned
+        if isinstance(observed, int | float):
+            return int(self) < observed
+        return NotImplemented
+
+
 class YtDlpDownloader:
     """Downloads every clip of a tweet at the best quality available."""
 
@@ -116,7 +136,12 @@ class YtDlpDownloader:
         self._proxy = proxy
 
     async def download(
-        self, url: str, dest: Path, *, on_progress: ProgressCallback | None = None
+        self,
+        url: str,
+        dest: Path,
+        *,
+        on_progress: ProgressCallback | None = None,
+        max_bytes: int | None = None,
     ) -> list[Clip]:
         """Fetch the tweet's clips into ``dest``.
 
@@ -126,10 +151,30 @@ class YtDlpDownloader:
         """
         loop = asyncio.get_running_loop()
         abandoned = threading.Event()
+        limit_hit: list[int] = []
+        stream_bytes: dict[tuple[object, object], int] = {}
+        clip_bytes: dict[object, int] = {}
 
         def hook(status: dict[str, Any]) -> None:
             if abandoned.is_set():
                 raise _Abandoned
+            if max_bytes is not None and status.get("status") == "downloading":
+                downloaded = int(status.get("downloaded_bytes") or 0)
+                clip, stream = _progress_keys(status)
+                stream_key = (clip, stream)
+                previous = stream_bytes.get(stream_key, 0)
+                received = clip_bytes.get(clip, 0)
+                received += downloaded - previous if downloaded >= previous else downloaded
+                stream_bytes[stream_key] = downloaded
+                clip_bytes[clip] = received
+
+                observed = received
+                exact = status.get("total_bytes")
+                if isinstance(exact, int | float):
+                    observed = max(observed, received - downloaded + int(exact))
+                if observed > max_bytes:
+                    limit_hit.append(int(observed))
+                    raise _Abandoned
             if on_progress is None:
                 return
             text = _format_progress(status)
@@ -137,7 +182,15 @@ class YtDlpDownloader:
                 loop.call_soon_threadsafe(on_progress, text)
 
         try:
-            info = await asyncio.to_thread(self._extract, url, dest, hook, abandoned)
+            info = await asyncio.to_thread(
+                self._extract,
+                url,
+                dest,
+                hook,
+                abandoned,
+                max_bytes,
+                limit_hit,
+            )
         except asyncio.CancelledError:
             # A running thread cannot be cancelled: `to_thread`'s future is
             # already RUNNING, so cancel() returns False and yt-dlp keeps
@@ -147,8 +200,20 @@ class YtDlpDownloader:
             # itself within a chunk or two.
             abandoned.set()
             raise
-        except (DownloadError, ExtractorError) as exc:
-            raise _classify(exc) from exc
+        except Exception as exc:
+            if limit_hit:
+                raise DownloadTooLarge(
+                    limit_bytes=max_bytes or 0,
+                    observed_bytes=limit_hit[0],
+                ) from exc
+            if isinstance(exc, DownloadError | ExtractorError):
+                raise _classify(exc) from exc
+            raise
+        if limit_hit:
+            raise DownloadTooLarge(
+                limit_bytes=max_bytes or 0,
+                observed_bytes=limit_hit[0],
+            )
         return _clips_from_info(info, url)
 
     def _extract(
@@ -157,9 +222,13 @@ class YtDlpDownloader:
         dest: Path,
         hook: Callable[[dict[str, Any]], None],
         abandoned: threading.Event,
+        max_bytes: int | None,
+        limit_hit: list[int],
     ) -> Any:
         try:
-            with YoutubeDL(self._options(dest, hook)) as ydl:
+            with YoutubeDL(
+                self._options(dest, hook, max_bytes=max_bytes, limit_hit=limit_hit)
+            ) as ydl:
                 return ydl.extract_info(url, download=True)
         except Exception:
             # Whatever yt-dlp wrapped our _Abandoned in, the request is already
@@ -169,7 +238,24 @@ class YtDlpDownloader:
                 return None
             raise
 
-    def _options(self, dest: Path, hook: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    def _options(
+        self,
+        dest: Path,
+        hook: Callable[[dict[str, Any]], None],
+        *,
+        max_bytes: int | None = None,
+        limit_hit: list[int] | None = None,
+    ) -> dict[str, Any]:
+        hits = limit_hit if limit_hit is not None else []
+
+        def reject_known_oversize(info: dict[str, Any], *, incomplete: bool) -> None:
+            if incomplete or max_bytes is None:
+                return
+            exact = _exact_selected_size(info)
+            if exact is not None and exact > max_bytes:
+                hits.append(exact)
+                raise _Abandoned
+
         options: dict[str, Any] = {
             # yt-dlp's own default selector. The `/b` fallback is what carries
             # X's animated GIFs, which are audio-less mp4 and so never satisfy
@@ -191,6 +277,11 @@ class YtDlpDownloader:
             "socket_timeout": 30,
             "retries": 3,
         }
+        if max_bytes is not None:
+            # The format metadata check runs before any downloader is opened;
+            # max_filesize catches an exact HTTP Content-Length before its body.
+            options["match_filter"] = reject_known_oversize
+            options["max_filesize"] = _MaxFileSize(max_bytes, hits)
         # A throwaway copy inside this request's own scratch directory, never
         # the owner's export: yt-dlp rewrites the cookie file it is given on
         # every run, including on the way out of an abandoned download (see
@@ -201,6 +292,26 @@ class YtDlpDownloader:
         if self._proxy is not None:
             options["proxy"] = self._proxy
         return options
+
+
+def _exact_selected_size(info: dict[str, Any]) -> int | None:
+    formats = info.get("requested_formats")
+    if formats:
+        sizes = [item.get("filesize") for item in formats]
+        if sizes and all(isinstance(size, int | float) for size in sizes):
+            return sum(int(size) for size in sizes)
+        return None
+    size = info.get("filesize")
+    return int(size) if isinstance(size, int | float) else None
+
+
+def _progress_keys(status: dict[str, Any]) -> tuple[object, object]:
+    info = status.get("info_dict")
+    if not isinstance(info, dict):
+        return "download", status.get("filename") or status.get("tmpfilename") or "stream"
+    clip = (info.get("playlist_index"), info.get("id") or info.get("display_id"))
+    stream = info.get("format_id") or status.get("filename") or status.get("tmpfilename")
+    return clip, stream or id(info)
 
 
 def ffmpeg_available() -> bool:
@@ -250,9 +361,8 @@ def _tweet_id(entry: dict[str, Any]) -> str:
     """The id from the link, not the id of the media inside it.
 
     The X extractor puts the media object's id in `id` and the tweet's own id in
-    `display_id`. Names on the share are the share's only index (see
-    ARCHITECTURE.md D7), and an index you cannot look up from the original link
-    is not an index.
+    `display_id`. External names must be discoverable from the original link
+    (ARCHITECTURE.md D7), or they are not a useful index.
     """
     return str(entry.get("display_id") or entry.get("id") or "unknown")
 

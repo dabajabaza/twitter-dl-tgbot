@@ -19,10 +19,10 @@ from aiogram.exceptions import (
     TelegramRetryAfter,
     TelegramServerError,
 )
-from aiogram.types import BotCommand, ErrorEvent
+from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent
 
 from twitter_dl.bot import texts
-from twitter_dl.bot.handlers import fallback, links, start
+from twitter_dl.bot.handlers import fallback, links, overflow, start
 from twitter_dl.bot.middlewares import AuthMiddleware, PrivateChatOnlyMiddleware
 from twitter_dl.bot.storage import NoStorage
 from twitter_dl.config import Settings
@@ -31,6 +31,7 @@ from twitter_dl.runtime.worker import OwnerAlerts, RequestQueue, RequestWorker
 from twitter_dl.services.cookies import CookieSession
 from twitter_dl.services.delivery import ClipDelivery
 from twitter_dl.services.downloader import YtDlpDownloader, ffmpeg_available
+from twitter_dl.services.overflow import OverflowCatalog
 
 logger = logging.getLogger("twitter_dl")
 
@@ -61,7 +62,11 @@ _START_EXTEND_USEC = 120 * 1_000_000
 _RETRYABLE = (TelegramNetworkError, TelegramServerError, TelegramRetryAfter)
 
 
-def build_dispatcher(settings: Settings, queue: RequestQueue) -> Dispatcher:
+def build_dispatcher(
+    settings: Settings,
+    queue: RequestQueue,
+    overflow_catalog: OverflowCatalog,
+) -> Dispatcher:
     """Wire the dispatcher in the one order that matters.
 
     Shared with the test harness so the two can never drift: the gate order
@@ -75,9 +80,10 @@ def build_dispatcher(settings: Settings, queue: RequestQueue) -> Dispatcher:
     dp = Dispatcher(storage=NoStorage())
     # Workflow data: aiogram hands these to any handler declaring a parameter of
     # the same name. With no database there is nothing request-scoped to build,
-    # so a DI container would be ceremony around two singletons.
+    # so a DI container would be ceremony around these singletons.
     dp["settings"] = settings
     dp["queue"] = queue
+    dp["overflow_catalog"] = overflow_catalog
 
     # Both gates are outer middlewares on `update`, before any filter runs: a
     # stranger's message must not even be pattern-matched, let alone answered.
@@ -85,6 +91,7 @@ def build_dispatcher(settings: Settings, queue: RequestQueue) -> Dispatcher:
     dp.update.outer_middleware(AuthMiddleware(settings.allowed_ids))
 
     dp.include_router(start.router)
+    dp.include_router(overflow.router)
     dp.include_router(links.router)
     dp.include_router(fallback.router)  # must be last: it matches any message
 
@@ -121,7 +128,11 @@ def _acquire_single_instance_lock() -> Any:
         return sock
 
     lock_path = os.environ.get("LOCK_FILE") or os.path.join("/tmp", _LOCK_NAME)
-    handle = open(lock_path, "w")  # noqa: SIM115 — held open for the process's life
+    handle = open(  # noqa: SIM115 — held open for the process's life
+        lock_path,
+        "w",
+        encoding="utf-8",
+    )
     try:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -168,8 +179,12 @@ async def _establish_connection(bot: Bot) -> Any:
             delay = min(delay * 2, _CONNECT_RETRY_MAX_S)
 
 
-async def _set_commands(bot: Bot) -> None:
-    await bot.set_my_commands([BotCommand(command="help", description="What this bot does")])
+async def _set_commands(bot: Bot, *, owner_id: int) -> None:
+    await bot.delete_my_commands()
+    await bot.set_my_commands(
+        [BotCommand(command="overflow", description=texts.OVERFLOW_COMMAND_DESCRIPTION)],
+        scope=BotCommandScopeChat(chat_id=owner_id),
+    )
 
 
 async def _run_bot(settings: Settings) -> None:
@@ -181,6 +196,11 @@ async def _run_bot(settings: Settings) -> None:
     bot = Bot(token=settings.bot_token, session=session)
 
     queue = RequestQueue(settings.queue_limit)
+    overflow_catalog = OverflowCatalog(
+        settings.overflow_adapters,
+        default=settings.overflow_default,
+        state_file=settings.overflow_state_file,
+    )
     cookies = CookieSession(settings.cookies_file)
     worker = RequestWorker(
         queue=queue,
@@ -188,18 +208,14 @@ async def _run_bot(settings: Settings) -> None:
         delivery=ClipDelivery(
             bot,
             max_chat_bytes=settings.max_tg_video_bytes,
-            rclone_binary=settings.rclone_binary,
-            rclone_config=settings.rclone_config,
-            rclone_remote=settings.rclone_remote,
-            share_path_prefix=settings.share_path_prefix,
         ),
         alerts=OwnerAlerts(bot, owner_id=settings.owner_id, cookies=cookies),
         settings=settings,
     )
-    dp = build_dispatcher(settings, queue)
+    dp = build_dispatcher(settings, queue, overflow_catalog)
 
     me = await _establish_connection(bot)
-    await _set_commands(bot)
+    await _set_commands(bot, owner_id=settings.owner_id)
     logger.info(
         "bot @%s started (long polling), %d user(s) allowed",
         me.username,
@@ -214,8 +230,8 @@ async def _run_bot(settings: Settings) -> None:
         run_watchdog(bot, interval=_WATCHDOG_INTERVAL_S, probe_timeout=_WATCHDOG_PROBE_TIMEOUT_S)
     )
     try:
-        # Only messages are used; asking for anything else would have Telegram
-        # queue updates nobody reads.
+        # The bot consumes messages plus the Owner's Overflow Menu callbacks;
+        # asking for anything else would have Telegram queue updates nobody reads.
         #
         # close_bot_session=False: aiogram's own finally closes the session
         # before start_polling returns, which would tear the connector out from
@@ -223,7 +239,7 @@ async def _run_bot(settings: Settings) -> None:
         # after the worker has actually stopped.
         await dp.start_polling(
             bot,
-            allowed_updates=["message"],
+            allowed_updates=["message", "callback_query"],
             polling_timeout=_POLLING_TIMEOUT_S,
             close_bot_session=False,
         )

@@ -24,16 +24,19 @@ from twitter_dl.domain import Clip, ProgressCallback
 from twitter_dl.errors import (
     AuthExpired,
     DownloadFailed,
+    DownloadTooLarge,
     NetworkUnavailable,
     NotATweetLink,
     NoVideoInTweet,
-    ShareUnavailable,
+    OverflowFailed,
+    OverflowUnavailable,
     TweetUnavailable,
     TwitterDlError,
 )
 from twitter_dl.services.cookies import CookieSession
-from twitter_dl.services.delivery import DeliveryResult, ShareDelivery
+from twitter_dl.services.delivery import DeliveryResult, OverflowDelivery
 from twitter_dl.services.links import is_short_link, resolve_short_link
+from twitter_dl.services.overflow import OverflowChoice
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +45,6 @@ _REPLY_FOR: dict[type[TwitterDlError], str] = {
     NoVideoInTweet: texts.NO_VIDEO,
     TweetUnavailable: texts.TWEET_UNAVAILABLE,
     NetworkUnavailable: texts.NETWORK_UNAVAILABLE,
-    ShareUnavailable: texts.SHARE_FAILED,
     DownloadFailed: texts.DOWNLOAD_FAILED,
 }
 
@@ -52,7 +54,12 @@ class Downloader(Protocol):
     so the worker never has to import yt-dlp to be exercised."""
 
     async def download(
-        self, url: str, dest: Path, *, on_progress: ProgressCallback | None = None
+        self,
+        url: str,
+        dest: Path,
+        *,
+        on_progress: ProgressCallback | None = None,
+        max_bytes: int | None = None,
     ) -> list[Clip]: ...
 
 
@@ -60,7 +67,14 @@ class Delivery(Protocol):
     """What the worker needs from a delivery route."""
 
     async def deliver(
-        self, clip: Clip, *, chat_id: int, caption: str, index: int = 1, total: int = 1
+        self,
+        clip: Clip,
+        *,
+        chat_id: int,
+        caption: str,
+        overflow: OverflowChoice,
+        index: int = 1,
+        total: int = 1,
     ) -> DeliveryResult: ...
 
 
@@ -72,6 +86,7 @@ class Request:
     chat_id: int
     user_id: int
     reporter: ProgressReporter
+    overflow: OverflowChoice
 
 
 class RequestQueue:
@@ -203,16 +218,21 @@ class RequestWorker:
                 await request.reporter.set(texts.DOWNLOADING)
                 url = await self._resolve(request.url)
                 clips = await self._downloader.download(
-                    url, scratch, on_progress=_progress_into(request.reporter)
+                    url,
+                    scratch,
+                    on_progress=_progress_into(request.reporter),
+                    max_bytes=(
+                        None if request.overflow.ready else self._settings.max_tg_video_bytes
+                    ),
                 )
-                shares = await self._deliver(request, url, clips)
+                overflows = await self._deliver(request, url, clips)
             # Outside the deadline on purpose. It exists to bound the *work*,
             # and by here the work is done — the clips are delivered. Leaving
             # the verdict inside meant a deadline expiring during that last
             # edit cancelled the edit itself, freezing the status message on
-            # "Uploading…" forever. On the share route that lost the only copy
-            # of the path, which is the share's only index (D7).
-            await self._announce(request, shares)
+            # "Uploading…" forever. On an Overflow route that would lose the
+            # only locator returned by the Adapter (D7).
+            await self._announce(request, overflows)
         except TimeoutError:
             minutes = self._settings.download_timeout_s // 60
             logger.warning("request for %s timed out after %s min", request.url, minutes)
@@ -221,6 +241,29 @@ class RequestWorker:
             logger.warning("X rejected the stored cookies: %s", exc)
             await self._alerts.auth_expired(str(exc))
             await _say(request, texts.AUTH_EXPIRED)
+        except DownloadTooLarge:
+            await _say(
+                request,
+                texts.overflow_unavailable(
+                    request.overflow,
+                    max_mb=self._settings.max_tg_video_mb,
+                ),
+            )
+        except OverflowUnavailable as exc:
+            logger.info("request for %s has no Overflow delivery: %s", request.url, exc)
+            await _say(
+                request,
+                texts.overflow_unavailable(
+                    request.overflow,
+                    max_mb=self._settings.max_tg_video_mb,
+                ),
+            )
+        except OverflowFailed as exc:
+            logger.info("Overflow delivery for %s failed: %s", request.url, exc)
+            await _say(
+                request,
+                texts.OVERFLOW_FAILED.format(adapter=request.overflow.label),
+            )
         except TwitterDlError as exc:
             logger.info("request for %s failed: %s: %s", request.url, type(exc).__name__, exc)
             await _say(request, _REPLY_FOR.get(type(exc), texts.DOWNLOAD_FAILED))
@@ -234,39 +277,63 @@ class RequestWorker:
             return url
         return await resolve_short_link(url, proxy=self._settings.ytdlp_proxy)
 
-    async def _deliver(self, request: Request, url: str, clips: list[Clip]) -> list[ShareDelivery]:
-        """Send every clip where it belongs; report which ones went to the share."""
-        total = len(clips)
-        shares: list[ShareDelivery] = []
-        for index, clip in enumerate(clips, start=1):
-            await request.reporter.set(_delivery_status(clip, self._settings, index, total))
-            result = await self._delivery.deliver(
-                clip, chat_id=request.chat_id, caption=url, index=index, total=total
+    async def _deliver(
+        self, request: Request, url: str, clips: list[Clip]
+    ) -> list[OverflowDelivery]:
+        """Send every clip where it belongs; return external delivery receipts."""
+        if not request.overflow.ready and any(
+            clip.path.stat().st_size > self._settings.max_tg_video_bytes for clip in clips
+        ):
+            raise OverflowUnavailable(
+                adapter_id=request.overflow.adapter_id,
+                state=request.overflow.state.value,
             )
-            if isinstance(result, ShareDelivery):
-                shares.append(result)
-        return shares
+        total = len(clips)
+        overflows: list[OverflowDelivery] = []
+        for index, clip in enumerate(clips, start=1):
+            await request.reporter.set(
+                _delivery_status(clip, request.overflow, self._settings, index, total)
+            )
+            result = await self._delivery.deliver(
+                clip,
+                chat_id=request.chat_id,
+                caption=url,
+                overflow=request.overflow,
+                index=index,
+                total=total,
+            )
+            if isinstance(result, OverflowDelivery):
+                overflows.append(result)
+        return overflows
 
-    async def _announce(self, request: Request, shares: list[ShareDelivery]) -> None:
+    async def _announce(self, request: Request, overflows: list[OverflowDelivery]) -> None:
         """The request's last word, once the clips are already delivered."""
-        if not shares:
+        if not overflows:
             # Every clip made it into the chat, so the status message has
             # nothing left to say and the videos speak for themselves.
             await request.reporter.replace_with_upload()
             return
         await request.reporter.finish(
             "\n\n".join(
-                texts.SHARE_RESULT.format(
-                    size=texts.human_size(share.size_bytes), path=share.display_path
+                texts.OVERFLOW_RESULT.format(
+                    size=texts.human_size(overflow.size_bytes),
+                    adapter=overflow.adapter_label,
+                    location=overflow.location,
                 )
-                for share in shares
+                for overflow in overflows
             )
         )
 
 
-def _delivery_status(clip: Clip, settings: Settings, index: int, total: int) -> str:
+def _delivery_status(
+    clip: Clip,
+    overflow: OverflowChoice,
+    settings: Settings,
+    index: int,
+    total: int,
+) -> str:
     if clip.path.stat().st_size > settings.max_tg_video_bytes:
-        return texts.COPYING_TO_SHARE
+        return texts.DELIVERING_OVERFLOW.format(adapter=overflow.label)
     if total > 1:
         return texts.UPLOADING_MANY.format(index=index, total=total)
     return texts.UPLOADING
