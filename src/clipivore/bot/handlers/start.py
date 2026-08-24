@@ -7,6 +7,7 @@ from aiogram.types import Message
 from clipivore.bot import texts
 from clipivore.config import Settings
 from clipivore.services.overflow import OverflowCatalog
+from clipivore.services.providers import ProviderCatalog
 
 router = Router(name="start")
 
@@ -14,6 +15,11 @@ router = Router(name="start")
 @router.message(CommandStart())
 @router.message(Command("help"))
 async def show_help(
-    message: Message, settings: Settings, overflow_catalog: OverflowCatalog
+    message: Message,
+    settings: Settings,
+    overflow_catalog: OverflowCatalog,
+    provider_catalog: ProviderCatalog,
 ) -> None:
-    await message.answer(texts.help_message(settings.max_tg_video_mb, overflow_catalog.current))
+    await message.answer(
+        texts.help_message(settings.max_tg_video_mb, overflow_catalog.current, provider_catalog)
+    )

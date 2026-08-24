@@ -1,4 +1,4 @@
-"""Anything from a whitelisted user that held no tweet link.
+"""Anything from a whitelisted user that held no link a Provider claims.
 
 Registered last, so it only ever sees what nothing else wanted.
 """

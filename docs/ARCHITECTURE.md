@@ -172,7 +172,7 @@ Tweets from Premium accounts can run for an hour. Standing up a local Bot API
 server (a 2 GB limit) means another daemon on an old laptop for a rare case.
 
 **Decision.** A clip under the ceiling goes to the chat, captioned with the
-tweet's text and a footer linking the author's profile and the tweet itself
+post's text and a footer linking the author's profile and the post itself
 (D17). A clip over it goes through the `OverflowDestination` Adapter the
 Owner selected for the whole bot. The built-ins are an rclone-backed SMB Share
 and Yandex Disk with a public link; `none` disables Overflow delivery. The
@@ -269,7 +269,7 @@ Owner to select another. The queue is still lost on restart; "send the link
 again" remains cheaper than persistent recovery.
 
 **Revisit when** a second durable value, statistics, or "I have already
-downloaded this tweet" deduplication becomes necessary.
+downloaded this post" deduplication becomes necessary.
 
 ---
 
@@ -285,7 +285,7 @@ English and plain. Adapter labels and returned locators belong to the Adapter
 that supplies them.
 
 **Consequences.** Outside the delivery verdict there is nothing to escape and no
-markup to break; inside it, every foreign string — the tweet's text, the handle,
+markup to break; inside it, every foreign string — the post's text, the handle,
 the locator — passes through `html.escape`, and fitting happens *before*
 escaping so a trim cannot cut an entity in half. The plain-text rule is enforced
 by a test (`test_texts.py`): markup or Cyrillic in a `texts.py` string fails the
@@ -393,7 +393,8 @@ the extractor for whatever site the link points to. Out of the box yt-dlp knows
 
 **Decision.** `allowed_extractors: ["twitter.*"]` — exactly six X extractors and
 nothing else. An external URL produces "No suitable extractor found", which the
-taxonomy files under `NoVideoInTweet`.
+taxonomy files under `NoVideoInPost`. *(Extended by D18: the lock is now
+declared per Provider and is never the union of several.)*
 
 **Consequences.** A tweet linking to a video on someone else's site honestly
 answers "that tweet has no video in it", instead of delivering that stranger's
@@ -402,7 +403,7 @@ It also closes the path out of X through the owner's proxy: previously the
 author of a tweet — a stranger — effectively chose where the bot would go. The
 restriction is covered by a test.
 
-**Revisit when** downloading from links inside tweets becomes desirable — but
+**Revisit when** downloading from links inside posts becomes desirable — but
 that is a different product.
 
 ---
@@ -464,3 +465,43 @@ already escaped and fitted, and a naive trim there would cut a tag in half.
 
 **Revisit when** Telegram changes the caption limit, or a locator longer than
 the 4096-character message budget appears.
+
+---
+
+## D18. A Provider is a discovered module, and every scope guard is per Provider
+
+**Context.** The bot knew exactly one platform, and said so in three unrelated
+places: link regexes and a host allowlist in `services/links.py`, an extractor
+lock and error-marker tables in `services/downloader.py`, and the word "X" in a
+dozen strings in `bot/texts.py`. Adding a second platform meant editing all
+three, and nothing would have caught one platform's assumptions leaking into
+another's path.
+
+**Decision.** A *Provider* is a module in `clipivore/providers/`, discovered by
+scanning that package the way Overflow Adapters are discovered
+([ADR 0003](adr/0003-discovered-providers.md), following
+[ADR 0002](adr/0002-discovered-overflow-adapters.md)). It declares the link
+shapes it claims as class attributes, carries its own `Downloader`, and resolves
+its own short links. The catalog builds one combined pattern from every
+Provider, so a message's links come back in the order a person wrote them across
+platforms as well as within one. yt-dlp stays behind one file (D12): a
+yt-dlp-shaped Provider parametrises the shared engine with an `EngineProfile`,
+while a platform yt-dlp cannot serve may bring its own engine.
+
+Every scope guard moves with it and stays per Provider: the extractor lock (D15)
+and the redirect host allowlist are declared by the Provider that owns them, and
+are never combined. A union would let a post on one platform redirect into
+another platform's extractor — reopening exactly the hole D15 closed.
+
+**Consequences.** Adding a platform is adding a file plus its tests. A Provider
+that fails to construct is still recognised by its patterns, so its links get a
+verdict naming it instead of the silence an unknown link earns; a Provider that
+fails to *import* has no readable patterns, so its links do fall through and the
+startup log is the only place that shows. Neither can stop the bot, and neither
+hides the other Providers. Verdict strings name the platform through a
+`{provider}` placeholder rather than spelling it, so one string inventory serves
+them all (D10).
+
+**Revisit when** a Provider needs per-request state, or when out-of-repo
+Providers become desirable — both would break the zero-ceremony discovery this
+rests on.

@@ -194,10 +194,10 @@ async def test_an_adapter_locator_is_normalized_only_once(
 
 
 class TestOverflowName:
-    def test_it_sorts_by_date_and_greps_by_author_and_tweet(self, tmp_path: Path) -> None:
+    def test_it_sorts_by_date_and_greps_by_author_and_post(self, tmp_path: Path) -> None:
         clip = make_clip(
             tmp_path,
-            tweet_id="1234567890",
+            post_id="1234567890",
             uploader="someone",
             upload_date=date(2026, 8, 13),
         )

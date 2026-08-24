@@ -15,7 +15,7 @@ from clipivore.bot.captions import build_caption
 from clipivore.bot.progress import ProgressReporter
 from clipivore.config import Settings
 from clipivore.domain import Clip, DownloadProgress, ProgressCallback
-from clipivore.errors import AuthExpired, DownloadTooLarge, NoVideoInTweet, TweetUnavailable
+from clipivore.errors import AuthExpired, DownloadTooLarge, NoVideoInPost, PostUnavailable
 from clipivore.runtime.worker import (
     OwnerAlerts,
     Request,
@@ -27,8 +27,17 @@ from clipivore.runtime.worker import (
 from clipivore.services.cookies import CookieSession
 from clipivore.services.delivery import ChatDelivery, DeliveryResult, OverflowDelivery
 from clipivore.services.overflow import OverflowChoice, OverflowDestination, OverflowState
+from clipivore.services.providers import ProviderChoice
 from tests.helpers.bot_harness import BotHarness
-from tests.helpers.factories import OWNER_ID, build_settings, make_clip
+from tests.helpers.factories import (
+    OWNER_ID,
+    build_settings,
+    make_clip,
+    make_provider_choice,
+)
+
+# The name make_provider_choice gives its Provider; every verdict quotes it.
+PROVIDER_NAME = "X"
 
 TWEET = "https://x.com/someone/status/1234567890"
 
@@ -89,15 +98,14 @@ def build_worker(
     harness: BotHarness,
     settings: Settings,
     *,
-    downloader: FakeDownloader | None = None,
     delivery: FakeDelivery | None = None,
     alerts: OwnerAlerts | None = None,
 ) -> RequestWorker:
+    """The worker owns no engine any more — every Request brings its Provider."""
     return RequestWorker(
         queue=harness.queue,
-        downloader=downloader or FakeDownloader(),
         delivery=delivery or FakeDelivery(),
-        alerts=alerts or OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=None),
+        alerts=alerts or OwnerAlerts(harness.bot, owner_id=settings.owner_id),
         settings=settings,
     )
 
@@ -129,6 +137,8 @@ def make_request(
     *,
     overflow: OverflowChoice = OFF,
     source: SourceMessage | None = None,
+    downloader: FakeDownloader | None = None,
+    provider: ProviderChoice | None = None,
 ) -> Request:
     reporter = ProgressReporter(harness.bot, chat_id=OWNER_ID, message_id=777, min_interval=0.0)
     return Request(
@@ -137,6 +147,7 @@ def make_request(
         user_id=OWNER_ID,
         reporter=reporter,
         overflow=overflow,
+        provider=provider or make_provider_choice(downloader=downloader or FakeDownloader()),
         source=source,
     )
 
@@ -208,7 +219,7 @@ async def test_a_clip_is_delivered_and_the_status_message_steps_aside(
 
     # make_clip carries no tweet text, so the caption is just the footer.
     assert [caption for _, caption, _, _, _ in delivery.delivered] == [
-        build_caption("", TWEET, uploader="someone")
+        build_caption("", TWEET, provider=PROVIDER_NAME, uploader="someone")
     ]
     # The upload status answers "why is this taking long": it names the size.
     assert texts.UPLOADING.format(size="1 KB") in edited_texts(harness)
@@ -235,10 +246,10 @@ async def test_a_request_without_working_overflow_caps_the_download_early(
     harness: BotHarness, settings: Settings
 ) -> None:
     downloader = FakeDownloader()
-    worker = build_worker(harness, settings, downloader=downloader)
+    worker = build_worker(harness, settings)
 
     async with running(worker):
-        harness.queue.submit(make_request(harness, overflow=OFF))
+        harness.queue.submit(make_request(harness, overflow=OFF, downloader=downloader))
         await drain(harness.queue)
 
     assert downloader.max_bytes == [settings.max_tg_video_bytes]
@@ -248,10 +259,10 @@ async def test_a_request_with_working_overflow_keeps_best_quality_unbounded(
     harness: BotHarness, settings: Settings
 ) -> None:
     downloader = FakeDownloader()
-    worker = build_worker(harness, settings, downloader=downloader)
+    worker = build_worker(harness, settings)
 
     async with running(worker):
-        harness.queue.submit(make_request(harness, overflow=READY))
+        harness.queue.submit(make_request(harness, overflow=READY, downloader=downloader))
         await drain(harness.queue)
 
     assert downloader.max_bytes == [None]
@@ -264,11 +275,13 @@ async def test_crossing_the_limit_with_overflow_off_gets_an_explicit_verdict(
         limit_bytes=settings.max_tg_video_bytes,
         observed_bytes=63 * 1024 * 1024,
     )
-    worker = build_worker(harness, settings, downloader=FakeDownloader(error=error))
+    worker = build_worker(harness, settings)
 
     with caplog.at_level("INFO"):
         async with running(worker):
-            harness.queue.submit(make_request(harness, overflow=OFF))
+            harness.queue.submit(
+                make_request(harness, overflow=OFF, downloader=FakeDownloader(error=error))
+            )
             await drain(harness.queue)
 
     expected = texts.OVERFLOW_DISABLED.format(
@@ -290,10 +303,10 @@ async def test_every_clip_of_a_tweet_is_delivered_and_numbered(
         ]
     )
     delivery = FakeDelivery()
-    worker = build_worker(harness, settings, downloader=downloader, delivery=delivery)
+    worker = build_worker(harness, settings, delivery=delivery)
 
     async with running(worker):
-        harness.queue.submit(make_request(harness))
+        harness.queue.submit(make_request(harness, downloader=downloader))
         await drain(harness.queue)
 
     assert [(index, total) for _, _, _, index, total in delivery.delivered] == [
@@ -314,10 +327,10 @@ async def test_final_size_refusal_delivers_none_of_a_multi_clip_request(
         ]
     )
     delivery = FakeDelivery()
-    worker = build_worker(harness, settings, downloader=downloader, delivery=delivery)
+    worker = build_worker(harness, settings, delivery=delivery)
 
     async with running(worker):
-        harness.queue.submit(make_request(harness, overflow=OFF))
+        harness.queue.submit(make_request(harness, overflow=OFF, downloader=downloader))
         await drain(harness.queue)
 
     assert delivery.delivered == []
@@ -342,7 +355,7 @@ async def test_an_oversized_clip_is_reported_by_its_overflow_locator(
     verdict = next(text for text in edited_texts(harness) if overflow.location in text)
     # The source message is deleted on success, so the verdict itself must
     # carry the tweet's footer.
-    assert texts.OPEN_IN_X in verdict
+    assert texts.OPEN_IN.format(provider=PROVIDER_NAME) in verdict
     finish = next(
         call
         for call in harness.session.calls_of(EditMessageText)
@@ -362,12 +375,10 @@ async def test_the_overflow_verdict_escapes_the_tweets_text(
         location=r"\\router\share\clip.mp4",
     )
     downloader = FakeDownloader(clips=lambda dest: [make_clip(dest, description='a "<b>&" tweet')])
-    worker = build_worker(
-        harness, settings, downloader=downloader, delivery=FakeDelivery(result=overflow)
-    )
+    worker = build_worker(harness, settings, delivery=FakeDelivery(result=overflow))
 
     async with running(worker):
-        harness.queue.submit(make_request(harness, overflow=READY))
+        harness.queue.submit(make_request(harness, overflow=READY, downloader=downloader))
         await drain(harness.queue)
 
     verdict = next(text for text in edited_texts(harness) if overflow.location in text)
@@ -394,11 +405,18 @@ class TestSourceMessageCleanup:
         self, harness: BotHarness, settings: Settings
     ) -> None:
         worker = build_worker(
-            harness, settings, downloader=FakeDownloader(error=NoVideoInTweet("x"))
+            harness,
+            settings,
         )
 
         async with running(worker):
-            harness.queue.submit(make_request(harness, source=make_source(harness)))
+            harness.queue.submit(
+                make_request(
+                    harness,
+                    downloader=FakeDownloader(error=NoVideoInPost("x")),
+                    source=make_source(harness),
+                )
+            )
             await drain(harness.queue)
 
         assert USER_MESSAGE_ID not in deleted_ids(harness)
@@ -407,11 +425,18 @@ class TestSourceMessageCleanup:
         self, harness: BotHarness, settings: Settings
     ) -> None:
         worker = build_worker(
-            harness, settings, downloader=FakeDownloader(error=RuntimeError("nobody predicted"))
+            harness,
+            settings,
         )
 
         async with running(worker):
-            harness.queue.submit(make_request(harness, source=make_source(harness)))
+            harness.queue.submit(
+                make_request(
+                    harness,
+                    downloader=FakeDownloader(error=RuntimeError("nobody predicted")),
+                    source=make_source(harness),
+                )
+            )
             await drain(harness.queue)
 
         assert USER_MESSAGE_ID not in deleted_ids(harness)
@@ -437,10 +462,15 @@ class TestSourceMessageCleanup:
     ) -> None:
         source = make_source(harness, expected=2)
         failing = build_worker(
-            harness, settings, downloader=FakeDownloader(error=TweetUnavailable("gone"))
+            harness,
+            settings,
         )
         async with running(failing):
-            harness.queue.submit(make_request(harness, source=source))
+            harness.queue.submit(
+                make_request(
+                    harness, source=source, downloader=FakeDownloader(error=PostUnavailable("gone"))
+                )
+            )
             await drain(harness.queue)
         succeeding = build_worker(harness, settings)
         async with running(succeeding):
@@ -473,10 +503,12 @@ class TestSourceMessageCleanup:
             message="not JSON", original=ValueError("boom"), data="<html>502</html>"
         )
         downloader = FakeDownloader()
-        worker = build_worker(harness, settings, downloader=downloader)
+        worker = build_worker(harness, settings)
 
         async with running(worker) as task:
-            harness.queue.submit(make_request(harness, source=make_source(harness)))
+            harness.queue.submit(
+                make_request(harness, downloader=downloader, source=make_source(harness))
+            )
             await drain(harness.queue)
             assert not task.done()
 
@@ -488,10 +520,10 @@ async def test_the_scratch_directory_never_outlives_the_request(
     harness: BotHarness, settings: Settings
 ) -> None:
     downloader = FakeDownloader()
-    worker = build_worker(harness, settings, downloader=downloader)
+    worker = build_worker(harness, settings)
 
     async with running(worker):
-        harness.queue.submit(make_request(harness))
+        harness.queue.submit(make_request(harness, downloader=downloader))
         await drain(harness.queue)
 
     assert downloader.destinations and not downloader.destinations[0].exists()
@@ -500,24 +532,26 @@ async def test_the_scratch_directory_never_outlives_the_request(
 async def test_scratch_is_cleaned_up_after_a_failure_too(
     harness: BotHarness, settings: Settings
 ) -> None:
-    downloader = FakeDownloader(error=TweetUnavailable("gone"))
-    worker = build_worker(harness, settings, downloader=downloader)
+    downloader = FakeDownloader(error=PostUnavailable("gone"))
+    worker = build_worker(harness, settings)
 
     async with running(worker):
-        harness.queue.submit(make_request(harness))
+        harness.queue.submit(make_request(harness, downloader=downloader))
         await drain(harness.queue)
 
     assert downloader.destinations and not downloader.destinations[0].exists()
-    assert texts.TWEET_UNAVAILABLE in edited_texts(harness)
+    assert texts.POST_UNAVAILABLE.format(provider=PROVIDER_NAME) in edited_texts(harness)
 
 
 async def test_each_failure_class_gets_its_own_explanation(
     harness: BotHarness, settings: Settings
 ) -> None:
-    worker = build_worker(harness, settings, downloader=FakeDownloader(error=NoVideoInTweet("x")))
+    worker = build_worker(harness, settings)
 
     async with running(worker):
-        harness.queue.submit(make_request(harness))
+        harness.queue.submit(
+            make_request(harness, downloader=FakeDownloader(error=NoVideoInPost("x")))
+        )
         await drain(harness.queue)
 
     assert texts.NO_VIDEO in edited_texts(harness)
@@ -527,10 +561,10 @@ async def test_a_stalled_download_is_abandoned_and_the_user_told(
     harness: BotHarness, tmp_path: Path
 ) -> None:
     settings = build_settings(tmp_path, download_timeout_s=1)
-    worker = build_worker(harness, settings, downloader=FakeDownloader(delay=30))
+    worker = build_worker(harness, settings)
 
     async with running(worker):
-        harness.queue.submit(make_request(harness))
+        harness.queue.submit(make_request(harness, downloader=FakeDownloader(delay=30)))
         await drain(harness.queue, timeout=5.0)
 
     assert texts.TIMED_OUT.format(minutes=0) in edited_texts(harness)
@@ -540,12 +574,12 @@ async def test_an_unexpected_crash_does_not_wedge_the_queue_for_everyone_else(
     harness: BotHarness, settings: Settings
 ) -> None:
     downloader = FakeDownloader(error=RuntimeError("something nobody predicted"))
-    worker = build_worker(harness, settings, downloader=downloader)
+    worker = build_worker(harness, settings)
 
     async with running(worker):
-        harness.queue.submit(make_request(harness))
+        harness.queue.submit(make_request(harness, downloader=downloader))
         await drain(harness.queue)
-        harness.queue.submit(make_request(harness))
+        harness.queue.submit(make_request(harness, downloader=downloader))
         await drain(harness.queue)
 
     assert len(downloader.destinations) == 2
@@ -560,17 +594,26 @@ class TestOwnerAlerts:
         export.write_text(body)
         return CookieSession(export), export
 
+    def _provider(self, cookies: CookieSession) -> ProviderChoice:
+        """The alert now dedupes per Provider, so it needs one to talk about."""
+        return make_provider_choice(downloader=FakeDownloader(), cookies=cookies)
+
     async def test_expired_cookies_reach_the_owner_and_only_the_owner(
         self, harness: BotHarness, settings: Settings, tmp_path: Path
     ) -> None:
         cookies, export = self._session(tmp_path)
-        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
-        worker = build_worker(
-            harness, settings, downloader=FakeDownloader(error=AuthExpired("NSFW")), alerts=alerts
-        )
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id)
+        worker = build_worker(harness, settings, alerts=alerts)
 
         async with running(worker):
-            harness.queue.submit(make_request(harness))
+            harness.queue.submit(
+                make_request(
+                    harness,
+                    provider=make_provider_choice(
+                        downloader=FakeDownloader(error=AuthExpired("NSFW")), cookies=cookies
+                    ),
+                )
+            )
             await drain(harness.queue)
 
         sent = harness.session.calls_of(SendMessage)
@@ -579,16 +622,17 @@ class TestOwnerAlerts:
         # The owner is told which file to replace, not the bot's scratch copy.
         assert str(export) in sent[0].text
         # The person who asked is told something useful, but not the details.
-        assert texts.AUTH_EXPIRED in edited_texts(harness)
+        assert texts.AUTH_EXPIRED.format(provider=PROVIDER_NAME) in edited_texts(harness)
 
     async def test_the_owner_is_not_told_twice_about_the_same_dead_session(
         self, harness: BotHarness, settings: Settings, tmp_path: Path
     ) -> None:
         cookies, _ = self._session(tmp_path)
-        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
+        provider = self._provider(cookies)
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id)
 
-        await alerts.auth_expired("NSFW")
-        await alerts.auth_expired("NSFW")
+        await alerts.auth_expired(provider, "NSFW")
+        await alerts.auth_expired(provider, "NSFW")
 
         assert len(harness.session.calls_of(SendMessage)) == 1
 
@@ -599,13 +643,14 @@ class TestOwnerAlerts:
         # alert deduped on that file, every private tweet would look like a new
         # session and the owner would be spammed once per link.
         cookies, _ = self._session(tmp_path)
-        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
-        await alerts.auth_expired("NSFW")
+        provider = self._provider(cookies)
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id)
+        await alerts.auth_expired(provider, "NSFW")
 
         staged = cookies.stage_into(tmp_path / "req-1")
         assert staged is not None
         staged.write_text("rewritten by yt-dlp")
-        await alerts.auth_expired("NSFW")
+        await alerts.auth_expired(provider, "NSFW")
 
         assert len(harness.session.calls_of(SendMessage)) == 1
 
@@ -613,11 +658,12 @@ class TestOwnerAlerts:
         self, harness: BotHarness, settings: Settings, tmp_path: Path
     ) -> None:
         cookies, export = self._session(tmp_path)
-        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
-        await alerts.auth_expired("NSFW")
+        provider = self._provider(cookies)
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id)
+        await alerts.auth_expired(provider, "NSFW")
 
         export.write_text("a genuinely fresh export")
-        await alerts.auth_expired("NSFW")
+        await alerts.auth_expired(provider, "NSFW")
 
         assert len(harness.session.calls_of(SendMessage)) == 2
 
@@ -627,14 +673,15 @@ class TestOwnerAlerts:
         # Losing this one signal to a flap of the proxy would leave the owner
         # permanently unaware that their session is dead.
         cookies, _ = self._session(tmp_path)
-        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
+        provider = self._provider(cookies)
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id)
         harness.session.fail_on["SendMessage"] = TelegramNetworkError(
             method=SendMessage(chat_id=1, text="x"), message="proxy is down"
         )
 
-        await alerts.auth_expired("NSFW")
+        await alerts.auth_expired(provider, "NSFW")
         harness.session.fail_on.clear()
-        await alerts.auth_expired("NSFW")
+        await alerts.auth_expired(provider, "NSFW")
 
         assert len(harness.session.calls_of(SendMessage)) == 2
 
@@ -645,11 +692,12 @@ class TestOwnerAlerts:
         # "a fresh one". Treating it as fresh sends the owner a duplicate in
         # exactly the moment they are already replacing the file.
         cookies, export = self._session(tmp_path)
-        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
-        await alerts.auth_expired("NSFW")
+        provider = self._provider(cookies)
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id)
+        await alerts.auth_expired(provider, "NSFW")
 
         export.unlink()
-        await alerts.auth_expired("NSFW")
+        await alerts.auth_expired(provider, "NSFW")
 
         assert len(harness.session.calls_of(SendMessage)) == 1
 
@@ -657,13 +705,14 @@ class TestOwnerAlerts:
         self, harness: BotHarness, settings: Settings, tmp_path: Path
     ) -> None:
         cookies, export = self._session(tmp_path)
-        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id, cookies=cookies)
-        await alerts.auth_expired("NSFW")
+        provider = self._provider(cookies)
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id)
+        await alerts.auth_expired(provider, "NSFW")
         export.unlink()
-        await alerts.auth_expired("NSFW")
+        await alerts.auth_expired(provider, "NSFW")
 
         export.write_text("the replacement the owner just exported")
-        await alerts.auth_expired("NSFW")
+        await alerts.auth_expired(provider, "NSFW")
 
         assert len(harness.session.calls_of(SendMessage)) == 2
 
@@ -681,13 +730,13 @@ class TestTheWorkerCannotDieQuietly:
             message="not JSON", original=ValueError("boom"), data="<html>502 Bad Gateway</html>"
         )
         downloader = FakeDownloader()
-        worker = build_worker(harness, settings, downloader=downloader)
+        worker = build_worker(harness, settings)
 
         async with running(worker) as task:
-            harness.queue.submit(make_request(harness))
+            harness.queue.submit(make_request(harness, downloader=downloader))
             await drain(harness.queue)
             harness.session.fail_on.clear()
-            harness.queue.submit(make_request(harness))
+            harness.queue.submit(make_request(harness, downloader=downloader))
             await drain(harness.queue)
 
             assert not task.done()
@@ -724,7 +773,7 @@ class TestTheDeadlineBoundsWorkNotTheVerdict:
         # message on "Uploading…" forever — and on an Overflow route takes the
         # Adapter's only returned locator with it.
         settings = build_settings(tmp_path, download_timeout_s=1)
-        worker = build_worker(harness, settings, downloader=FakeDownloader(delay=0.8))
+        worker = build_worker(harness, settings)
 
         reporter = SlowFinishReporter(harness.bot, chat_id=OWNER_ID, message_id=777)
         request = Request(
@@ -733,6 +782,7 @@ class TestTheDeadlineBoundsWorkNotTheVerdict:
             user_id=OWNER_ID,
             reporter=reporter,
             overflow=OFF,
+            provider=make_provider_choice(downloader=FakeDownloader()),
         )
 
         async with running(worker):

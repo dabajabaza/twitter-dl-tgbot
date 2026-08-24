@@ -1,7 +1,7 @@
-"""The delivery caption: the tweet's text plus a footer naming its author.
+"""The delivery caption: the post's text plus a footer naming its author.
 
 The single place the bot emits HTML (docs/ARCHITECTURE.md D10, D17). Everything
-foreign — the tweet's text, the author's handle, both URLs — is escaped, and
+foreign — the post's text, the author's handle, both URLs — is escaped, and
 escaping happens *after* fitting, so a trim can never cut an entity in half.
 Telegram counts the caption limit on the rendered text in UTF-16 code units,
 markup excluded, which is why the budget below is computed from the visible
@@ -33,18 +33,20 @@ def build_caption(
     description: str,
     url: str,
     *,
+    provider: str,
     uploader: str = "",
     uploader_url: str = "",
     limit: int = CAPTION_LIMIT,
 ) -> str:
-    """The tweet's text, a blank line, then ``@author · Open in X``.
+    """The post's text, a blank line, then ``@author · Open in <Provider>``.
 
     The handle links to the author's profile (plain text when no profile URL is
-    known) and the label links to the tweet itself. Without a text the caption
-    is just the footer.
+    known) and the label links to the post itself. Without a text the caption is
+    just the footer.
     """
-    open_link = f'<a href="{html.escape(url, quote=True)}">{texts.OPEN_IN_X}</a>'
-    footer_html, footer_rendered = open_link, texts.OPEN_IN_X
+    open_label = texts.OPEN_IN.format(provider=provider)
+    open_link = f'<a href="{html.escape(url, quote=True)}">{html.escape(open_label)}</a>'
+    footer_html, footer_rendered = open_link, open_label
     if uploader:
         handle = f"@{uploader}"
         handle_html = (
@@ -53,7 +55,7 @@ def build_caption(
             else html.escape(handle)
         )
         footer_html = f"{handle_html}{_DOT}{open_link}"
-        footer_rendered = f"{handle}{_DOT}{texts.OPEN_IN_X}"
+        footer_rendered = f"{handle}{_DOT}{open_label}"
     budget = limit - utf16_length(footer_rendered) - len(_SEPARATOR)
     if not description or budget <= 0:
         return footer_html

@@ -29,40 +29,29 @@ from clipivore.errors import (
     DownloadFailed,
     DownloadTooLarge,
     NetworkUnavailable,
-    NotATweetLink,
-    NoVideoInTweet,
+    NotAPostLink,
+    NoVideoInPost,
     OverflowFailed,
     OverflowUnavailable,
-    TweetUnavailable,
+    PostUnavailable,
+    ProviderMisconfigured,
 )
-from clipivore.services.cookies import CookieSession
 from clipivore.services.delivery import DeliveryResult, OverflowDelivery
-from clipivore.services.links import is_short_link, resolve_short_link
 from clipivore.services.overflow import OverflowChoice
+from clipivore.services.providers import Provider, ProviderChoice
 
 logger = logging.getLogger(__name__)
 
+# Every verdict is formatted with the Provider's name, so one taxonomy answers
+# for all of them and no platform needs a string table of its own.
 _REPLY_FOR: dict[type[ClipivoreError], str] = {
-    NotATweetLink: texts.NOT_A_TWEET,
-    NoVideoInTweet: texts.NO_VIDEO,
-    TweetUnavailable: texts.TWEET_UNAVAILABLE,
+    NotAPostLink: texts.NOT_A_POST,
+    NoVideoInPost: texts.NO_VIDEO,
+    PostUnavailable: texts.POST_UNAVAILABLE,
     NetworkUnavailable: texts.NETWORK_UNAVAILABLE,
+    ProviderMisconfigured: texts.PROVIDER_MISCONFIGURED,
     DownloadFailed: texts.DOWNLOAD_FAILED,
 }
-
-
-class Downloader(Protocol):
-    """What the worker needs from a download engine — stated where it is used,
-    so the worker never has to import yt-dlp to be exercised."""
-
-    async def download(
-        self,
-        url: str,
-        dest: Path,
-        *,
-        on_progress: ProgressCallback | None = None,
-        max_bytes: int | None = None,
-    ) -> list[Clip]: ...
 
 
 class Delivery(Protocol):
@@ -121,13 +110,19 @@ class SourceMessage:
 
 @dataclass
 class Request:
-    """One tweet link accepted from one user, holding one queue slot."""
+    """One post link accepted from one user, holding one queue slot.
+
+    The Provider is captured when the link is accepted, so it names the platform
+    in every verdict this request can end with — including the ones raised
+    before anything was downloaded.
+    """
 
     url: str
     chat_id: int
     user_id: int
     reporter: ProgressReporter
     overflow: OverflowChoice
+    provider: ProviderChoice
     source: SourceMessage | None = None
 
 
@@ -178,46 +173,52 @@ class RequestQueue:
 class OwnerAlerts:
     """Tells the owner about the one failure only they can fix.
 
-    Deduplicated by the identity of the owner's cookie *export* — which the bot
-    never writes to (see services/cookies.py) — so the owner hears once per
-    export, and replacing the file re-arms the alert. Counting successes instead
-    would go quiet at the wrong moment: public tweets keep downloading with a
-    dead session, which is precisely why the breakage is easy to miss.
+    Deduplicated per Provider, by the identity of that Provider's cookie
+    *export* — which the bot never writes to (see services/cookies.py) — so the
+    owner hears once per export, and replacing the file re-arms the alert.
+    Counting successes instead would go quiet at the wrong moment: public posts
+    keep downloading with a dead session, which is precisely why the breakage is
+    easy to miss.
     """
 
-    def __init__(self, bot: Bot, *, owner_id: int, cookies: CookieSession | None) -> None:
+    def __init__(self, bot: Bot, *, owner_id: int) -> None:
         self._bot = bot
         self._owner_id = owner_id
-        self._cookies = cookies
-        self._alerted = False
-        self._alerted_version: tuple[float, int] | None = None
+        self._alerted: dict[str, tuple[float, int] | None] = {}
 
-    async def auth_expired(self, detail: str) -> None:
-        version = self._cookies.version() if self._cookies else None
+    async def auth_expired(self, provider: ProviderChoice, detail: str) -> None:
+        cookies = getattr(provider.provider, "cookies", None)
+        version = cookies.version() if cookies else None
         # `None` means "cannot tell which export this is" — the file is being
         # replaced right now, or stat failed. That is not evidence of a new
         # session, so it must not re-arm the alert: the owner mid-swap would
         # otherwise get a duplicate, and the remembered version would be
         # clobbered with None.
-        if self._alerted and (version is None or self._alerted_version == version):
+        if provider.provider_id in self._alerted and (
+            version is None or self._alerted[provider.provider_id] == version
+        ):
             return
         try:
             await self._bot.send_message(
                 chat_id=self._owner_id,
-                text=texts.OWNER_AUTH_EXPIRED.format(path=self._cookies_path(), detail=detail),
+                text=texts.OWNER_AUTH_EXPIRED.format(
+                    provider=provider.name,
+                    path=_cookies_path(cookies),
+                    detail=detail,
+                ),
             )
         except Exception as exc:
-            # The alert is not marked as delivered, so the next private tweet
+            # The alert is not marked as delivered, so the next private post
             # tries again. Marking first and sending second would lose the one
             # signal this bot owes the owner to a single flap of the proxy.
             logger.warning("could not alert the owner: %s: %s", type(exc).__name__, exc)
             return
-        self._alerted = True
-        self._alerted_version = version
+        self._alerted[provider.provider_id] = version
 
-    def _cookies_path(self) -> str:
-        source = self._cookies.source if self._cookies else None
-        return str(source) if source else "COOKIES_FILE"
+
+def _cookies_path(cookies: object | None) -> str:
+    source = getattr(cookies, "source", None)
+    return str(source) if source else "COOKIES_FILE"
 
 
 class RequestWorker:
@@ -227,13 +228,11 @@ class RequestWorker:
         self,
         *,
         queue: RequestQueue,
-        downloader: Downloader,
         delivery: Delivery,
         alerts: OwnerAlerts,
         settings: Settings,
     ) -> None:
         self._queue = queue
-        self._downloader = downloader
         self._delivery = delivery
         self._alerts = alerts
         self._settings = settings
@@ -259,8 +258,9 @@ class RequestWorker:
         try:
             async with asyncio.timeout(self._settings.download_timeout_s):
                 await request.reporter.set(texts.DOWNLOADING)
-                url = await self._resolve(request.url)
-                clips = await self._downloader.download(
+                provider = _serving(request)
+                url = await provider.resolve(request.url)
+                clips = await provider.downloader.download(
                     url,
                     scratch,
                     on_progress=_progress_into(request.reporter),
@@ -282,9 +282,9 @@ class RequestWorker:
             logger.warning("request for %s timed out after %s min", request.url, minutes)
             await _say(request, texts.TIMED_OUT.format(minutes=minutes))
         except AuthExpired as exc:
-            logger.warning("X rejected the stored cookies: %s", exc)
-            await self._alerts.auth_expired(str(exc))
-            await _say(request, texts.AUTH_EXPIRED)
+            logger.warning("%s rejected the stored cookies: %s", request.provider.name, exc)
+            await self._alerts.auth_expired(request.provider, str(exc))
+            await _say(request, texts.AUTH_EXPIRED.format(provider=request.provider.name))
         except DownloadTooLarge as exc:
             # Without this line an early abort is invisible in the log: the
             # verdict text is shared with the final-size refusal below.
@@ -326,7 +326,8 @@ class RequestWorker:
             )
         except ClipivoreError as exc:
             logger.info("request for %s failed: %s: %s", request.url, type(exc).__name__, exc)
-            await _say(request, _REPLY_FOR.get(type(exc), texts.DOWNLOAD_FAILED))
+            reply = _REPLY_FOR.get(type(exc), texts.DOWNLOAD_FAILED)
+            await _say(request, reply.format(provider=request.provider.name))
         finally:
             # The scratch directory holds the whole clip, so leaving it behind
             # would fill the jail's dataset a few requests later.
@@ -337,11 +338,6 @@ class RequestWorker:
             # place the source message learns how its request ended.
             if request.source is not None:
                 await request.source.resolve(succeeded=succeeded)
-
-    async def _resolve(self, url: str) -> str:
-        if not is_short_link(url):
-            return url
-        return await resolve_short_link(url, proxy=self._settings.ytdlp_proxy)
 
     async def _deliver(
         self, request: Request, url: str, clips: list[Clip]
@@ -369,6 +365,7 @@ class RequestWorker:
                 caption=build_caption(
                     clip.description,
                     url,
+                    provider=request.provider.name,
                     uploader=clip.uploader,
                     uploader_url=clip.uploader_url,
                 ),
@@ -406,12 +403,13 @@ class RequestWorker:
             )
             for overflow in overflows
         ]
-        # The verdict carries the tweet's text and links itself: the source
+        # The verdict carries the post's text and links itself: the source
         # message is deleted on success, so this is where they survive.
         first = clips[0] if clips else None
         tail = build_caption(
             first.description if first else "",
             url,
+            provider=request.provider.name,
             uploader=first.uploader if first else "",
             uploader_url=first.uploader_url if first else "",
         )
@@ -419,6 +417,19 @@ class RequestWorker:
             "\n\n".join([*blocks, tail]),
             parse_mode=ParseMode.HTML,
         )
+
+
+def _serving(request: Request) -> Provider:
+    """The Provider that will actually do the work, or a verdict saying why not.
+
+    A Provider that failed to construct still claims its links — that is what
+    turns a broken platform from silence into a named refusal — so this is where
+    the claim stops and the refusal starts.
+    """
+    provider = request.provider.provider
+    if provider is None:
+        raise ProviderMisconfigured(f"{request.provider.name} is misconfigured")
+    return provider
 
 
 def _delivery_status(

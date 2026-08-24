@@ -15,6 +15,7 @@ from clipivore.bot.handlers import fallback, links, overflow, start
 from clipivore.config import Settings
 from clipivore.runtime.worker import RequestQueue
 from clipivore.services.overflow import OverflowCatalog
+from clipivore.services.providers import ProviderCatalog
 from tests.helpers.bot_harness import BotHarness, RecordingSession
 from tests.helpers.factories import build_settings
 
@@ -40,7 +41,10 @@ async def harness(settings: Settings) -> AsyncIterator[BotHarness]:
         "tests.helpers.no_adapters",
         state_file=settings.overflow_state_file,
     )
-    dp = build_dispatcher(settings, queue, overflow_catalog)
+    # The real providers package: handler tests need X's actual link patterns,
+    # and nothing here ever downloads.
+    provider_catalog = ProviderCatalog()
+    dp = build_dispatcher(settings, queue, overflow_catalog, provider_catalog)
     await dp.emit_startup()
     try:
         yield BotHarness(
@@ -49,6 +53,7 @@ async def harness(settings: Settings) -> AsyncIterator[BotHarness]:
             session=session,
             queue=queue,
             overflow_catalog=overflow_catalog,
+            provider_catalog=provider_catalog,
         )
     finally:
         await dp.emit_shutdown()

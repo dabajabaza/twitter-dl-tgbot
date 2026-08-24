@@ -1,7 +1,8 @@
 # clipivore-tgbot
 
-A personal Telegram bot: send it a link to a post on X and get the video from
-it, at the best quality available. Downloads run through `yt-dlp` under the
+A personal Telegram bot: send it a link to a post and get the video from it, at
+the best quality available. X is the platform it was built for; other Providers
+are one file each. Downloads run through `yt-dlp` under the
 owner's own cookies, so NSFW, age-gated and protected accounts the owner
 follows are all reachable.
 
@@ -14,14 +15,18 @@ real account, one uplink.
 
 - A link in a message (`x.com`, `twitter.com`, `t.co`) becomes a video in the
   chat. There is no command to remember — the link is the command.
-- Several links in one message, and several clips in one tweet, are all handled
+- Several links in one message, and several clips in one post, are all handled
   in turn.
 - A clip up to 50 MB (the Bot API ceiling) arrives in the chat, captioned with
-  the tweet's text and a footer — `@author · Open in X` — linking the author's
-  profile and the tweet. Once everything a message asked for arrived, the
+  the post's text and a footer — `@author · Open in X` — linking the author's
+  profile and the post. Once everything a message asked for arrived, the
   message with the link is deleted; any failure leaves it in place. Delivery of
   larger clips is optional: the owner can switch between the configured
   Overflow Adapters from the bot's Menu.
+- Sources are pluggable: every module in `src/clipivore/providers/` is a
+  Provider, discovered at startup and listed in `/help`. One that is broken is
+  named as such instead of quietly ignoring your link, and never takes the
+  others down. See [ADR 0003](docs/adr/0003-discovered-providers.md).
 - Built-in Overflow Adapters cover an SMB Share and Yandex Disk through
   `rclone`; every Adapter found in `src/clipivore/adapters/` appears in the
   Menu automatically, ready or not. A custom Adapter is one module in that
@@ -57,6 +62,55 @@ uv run ruff check .
 uv run ruff format .
 uv run mypy src tests
 ```
+
+### Adding a Provider
+
+Drop one module into `src/clipivore/providers/` holding exactly one concrete
+`Provider` subclass — the file name is its stable id, `name` is the word every
+reply uses, and `post_link` must carry a named `id` group:
+
+```python
+import re
+from typing import ClassVar
+
+from clipivore.domain import Downloader
+from clipivore.services.downloader import EngineProfile, YtDlpDownloader
+from clipivore.services.providers import Provider, ProviderContext
+
+
+class ExampleProvider(Provider):
+    name: ClassVar[str] = "Example"
+    hint: ClassVar[str] = "example.com/<user>/post/<id>"          # one /help line
+    post_link: ClassVar[re.Pattern[str]] = re.compile(
+        r"https://example\.com/[^/]+/post/(?P<id>\w+)"
+    )
+
+    def __init__(self, context: ProviderContext) -> None:
+        # Read your own EXAMPLE_* settings here; `context` carries the one
+        # outbound proxy the whole bot uses.
+        self._engine = YtDlpDownloader(
+            # Never a union with another Provider's extractors: that would let a
+            # post here redirect into someone else's extractor (D15, D18).
+            EngineProfile(allowed_extractors=("example",)),
+            proxy=context.proxy,
+        )
+
+    @property
+    def downloader(self) -> Downloader:
+        return self._engine
+```
+
+A platform with short links overrides `resolve()` and declares `short_link`;
+`services/redirects.py` follows them with a per-hop host check. A platform
+yt-dlp cannot serve at all may return any `Downloader` of its own.
+
+Discovery finds it at startup — there is nothing to register, and
+`/help` lists it. A Provider that fails to construct still claims its links, so
+they get a verdict naming it rather than silence; one that fails to *import*
+cannot, and shows only in the startup log. Neither stops the bot or hides the
+other Providers. Modules whose names start with an underscore are shared
+helpers; a subdirectory is refused visibly as misconfigured. The reasoning is in
+[ADR 0003](docs/adr/0003-discovered-providers.md).
 
 ### Adding an Overflow Adapter
 
@@ -104,30 +158,33 @@ uv lock --upgrade-package yt-dlp && uv export --format requirements-txt --no-has
 
 ## Manual run-through before a release
 
-The automated tests never touch the network, so the X → yt-dlp → Telegram chain
-is only ever exercised by a person. With a test token:
+The automated tests never touch the network, so the Provider → yt-dlp → Telegram
+chain is only ever exercised by a person. With a test token:
 
-1. An ordinary tweet with a video → the clip arrives, captioned with the
-   tweet's text and a footer whose `@author` opens the profile and whose
-   "Open in X" opens the tweet; the message with the link disappears.
-2. A tweet with several clips → all of them arrive, and the status message
+1. An ordinary post with a video → the clip arrives, captioned with the post's
+   text and a footer whose `@author` opens the profile and whose "Open in X"
+   opens the post; the message with the link disappears.
+2. A post with several clips → all of them arrive, and the status message
    disappears after the last one.
-3. A tweet with no video → "That tweet has no video in it", and the message
-   with the link stays.
-4. Text with no links at all → "No tweet link found".
-5. Six links at once → the sixth is refused with "Queue is full".
-6. `MAX_TG_VIDEO_MB=1` with Overflow delivery off → an explicit size-limit
+3. A post with no video → "That post has no video in it", and the message with
+   the link stays.
+4. Text with no links at all → "No link I recognise…".
+5. `/help` → every discovered Provider is listed with its link shapes.
+6. Six links at once → the sixth is refused with "Queue is full".
+7. `MAX_TG_VIDEO_MB=1` with Overflow delivery off → an explicit size-limit
    verdict naming how far the download got, and no complete oversized download.
-7. Enable the Share Adapter → the file lands there and the chat gets the path
-   plus the tweet's text and footer; enable Yandex Disk → the chat gets a
+8. Enable the Share Adapter → the file lands there and the chat gets the path
+   plus the post's text and footer; enable Yandex Disk → the chat gets a
    working public link.
-8. One good link and one dead link in the same message → the good one arrives,
+9. One good link and one dead link in the same message → the good one arrives,
    and the message stays.
-9. Remove or break the selected Adapter → small clips still arrive, and a large
+10. Remove or break the selected Adapter → small clips still arrive, and a large
    one names the missing or misconfigured Overflow destination.
-10. A broken `COOKIES_FILE` plus an NSFW tweet → one alert to the owner, a
-   polite refusal to whoever asked.
-11. Proxy switched off for a minute → "Can't reach X right now", and the bot
+11. Point `COOKIES_FILE` at a directory → the bot still starts, `/help` lists X
+   as unavailable, and an X link is refused by name while everything else works.
+12. A valid but stale `COOKIES_FILE` plus an NSFW post → one alert to the owner
+   naming the Provider, a polite refusal to whoever asked.
+13. Proxy switched off for a minute → "Can't reach X right now", and the bot
    neither hangs nor dies.
 
 ## Operations

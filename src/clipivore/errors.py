@@ -1,10 +1,13 @@
 """Failure taxonomy.
 
 yt-dlp reports everything as one ``DownloadError`` carrying a human sentence, so
-the difference between "my cookies died", "this tweet has no video" and "the
+the difference between "my cookies died", "this post has no video" and "the
 proxy is down" only exists if someone draws it. The bot draws it here: the
 worker picks a reply per class, and exactly one class (`AuthExpired`) is worth
 waking the owner for.
+
+The classes name no Provider. Which platform failed is carried alongside the
+error, by the Request, so one taxonomy serves them all.
 """
 
 
@@ -12,15 +15,15 @@ class ClipivoreError(Exception):
     """Anything this bot knows how to explain to a human."""
 
 
-class NotATweetLink(ClipivoreError):
-    """A t.co shortlink that turned out to point somewhere other than a tweet."""
+class NotAPostLink(ClipivoreError):
+    """A short link that turned out to point somewhere other than a post."""
 
 
-class NoVideoInTweet(ClipivoreError):
-    """The tweet exists and is readable, it just has no video in it."""
+class NoVideoInPost(ClipivoreError):
+    """The post exists and is readable, it just has no video in it."""
 
 
-class TweetUnavailable(ClipivoreError):
+class PostUnavailable(ClipivoreError):
     """Deleted, suspended, protected, or otherwise not there for us."""
 
 
@@ -28,7 +31,7 @@ class AuthExpired(ClipivoreError):
     """The cookie session no longer authenticates.
 
     The one failure the owner must act on: everything keeps "working" for public
-    tweets while NSFW, age-gated and protected content silently stops.
+    posts while NSFW, age-gated and protected content silently stops.
     """
 
 
@@ -38,6 +41,15 @@ class NetworkUnavailable(ClipivoreError):
 
 class DownloadFailed(ClipivoreError):
     """yt-dlp failed in a way this taxonomy does not recognise."""
+
+
+class ProviderMisconfigured(ClipivoreError):
+    """The Provider that claims this link could not be built at startup.
+
+    Its links are still recognised — the patterns are declared on the class, so
+    they survive a failed construction — which is the whole point: the person
+    gets a named refusal instead of the silence an unknown link gets.
+    """
 
 
 class DownloadTooLarge(ClipivoreError):

@@ -1,11 +1,16 @@
-"""Pulling clips out of a tweet with yt-dlp.
+"""Pulling clips out of a post with yt-dlp.
 
 yt-dlp is used as a library rather than a subprocess for two reasons that both
 show up in the chat: progress arrives as structured callbacks instead of text
 to be scraped off stdout, and failures arrive as an exception whose message can
 be classified once, here, instead of at every call site.
 
-One tweet can hold several videos, so a download yields a *list* of clips.
+One post can hold several videos, so a download yields a *list* of clips.
+
+This is still the only module that imports yt-dlp (ARCHITECTURE.md D12). What
+differs between platforms — which extractors may run, which sentences mean what,
+how the metadata is spelled — arrives as an `EngineProfile` from the Provider,
+so a second platform costs a declaration rather than a second engine.
 """
 
 import asyncio
@@ -14,6 +19,7 @@ import re
 import shutil
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -27,24 +33,12 @@ from clipivore.errors import (
     DownloadFailed,
     DownloadTooLarge,
     NetworkUnavailable,
-    NoVideoInTweet,
-    TweetUnavailable,
+    NoVideoInPost,
+    PostUnavailable,
 )
 from clipivore.services.cookies import CookieSession
 
 logger = logging.getLogger(__name__)
-
-# Only X. A tweet with no media but an outbound link makes yt-dlp follow that
-# link (`url_result(expanded_url…)` in the extractor) and download whatever
-# lives there — so a link to an article would come back as somebody else's
-# video, captioned with the tweet and filed externally under their name.
-_ALLOWED_EXTRACTORS = ["twitter.*"]
-
-# X appends a t.co pointer to the tweet's own media at the end of the text; in
-# a caption that link only duplicates the one the footer already carries. Both
-# schemes occur in the wild. Only a *trailing* run is stripped — a t.co in the
-# middle of a sentence is part of what the author said.
-_TRAILING_TCO = re.compile(r"(?:\s*https?://t\.co/[A-Za-z0-9]+)+\s*$")
 
 # yt-dlp appends a generic "how to pass cookies" hint to *every* login-required
 # error. That hint alone contains the words that otherwise mean "our session was
@@ -52,46 +46,8 @@ _TRAILING_TCO = re.compile(r"(?:\s*https?://t\.co/[A-Za-z0-9]+)+\s*$")
 # account nobody could see would read as expired cookies.
 _LOGIN_HINT_MARKERS = ("use --cookies", "--cookies-from-browser")
 
-# The account or tweet is in a state no credential would change. Checked before
-# the auth markers, because X phrases these as authorization failures too:
-# "You are not authorized to view this protected tweet" is not our session's
-# fault, and waking the owner over it would devalue the one alert that matters.
-_ACCOUNT_STATE_MARKERS = (
-    "protected",
-    "suspended",
-    "deleted",
-    "no longer exists",
-    "does not exist",
-    "doesn't exist",
-    "not found",
-)
-# Our session specifically was not accepted.
-_AUTH_MARKERS = (
-    "nsfw",
-    "requires authentication",
-    "only available for registered users",
-    "log in",
-    "login",
-    "sign in",
-    "logged in",
-    "authoriz",
-    "authenticat",
-    "cookies",
-    "account is required",
-    "age-restricted",
-    "age restricted",
-)
-_NO_VIDEO_MARKERS = (
-    "no video could be found",
-    "no video",
-    "is not a video",
-    "no media",
-    "unsupported url",
-    # What the extractor restriction above produces when a tweet's only media
-    # lives on someone else's site.
-    "no suitable extractor",
-)
-_UNAVAILABLE_MARKERS = ("unavailable", "private")
+# Not per-platform: these are the engine's own failures, in the engine's own
+# words. The network is the network whoever is on the other end.
 _NETWORK_MARKERS = (
     "proxy",
     "connection refused",
@@ -104,6 +60,46 @@ _NETWORK_MARKERS = (
     "network is unreachable",
     "tunnel connection failed",
 )
+# Produced by the extractor allowlist below when a post's only media lives on
+# somebody else's site. Every Provider gets this one for free, because every
+# Provider has the allowlist.
+_ENGINE_NO_VIDEO_MARKERS = ("unsupported url", "no suitable extractor")
+
+
+def _unchanged(text: str) -> str:
+    return text
+
+
+def _no_profile(handle: str) -> str:
+    return ""
+
+
+@dataclass(frozen=True)
+class EngineProfile:
+    """What one platform needs from the shared yt-dlp engine.
+
+    ``allowed_extractors`` is a scope guard, not a convenience (ARCHITECTURE.md
+    D15): a post with no media but an outbound link makes yt-dlp follow that
+    link — `url_result(...)` inside the extractor — and download whatever lives
+    there. Without the lock a link to an article comes back as somebody else's
+    video, captioned with this post and filed externally under their name. It is
+    always one platform's extractors, never the union of every Provider's: a
+    union would let one platform's post redirect into another's extractor.
+    """
+
+    allowed_extractors: tuple[str, ...]
+    # Checked before the auth markers: a state no credential would change.
+    # Platforms phrase these as authorization failures too, and waking the owner
+    # over a protected account would devalue the one alert that matters.
+    account_state_markers: tuple[str, ...] = ()
+    # This session specifically was not accepted.
+    auth_markers: tuple[str, ...] = ()
+    no_video_markers: tuple[str, ...] = ()
+    unavailable_markers: tuple[str, ...] = ()
+    # Strips whatever link furniture the platform appends to a post's text.
+    clean_description: Callable[[str], str] = field(default=_unchanged)
+    # The author's profile URL, when the extractor did not supply one.
+    profile_url: Callable[[str], str] = field(default=_no_profile)
 
 
 class _Abandoned(Exception):
@@ -130,14 +126,16 @@ class _MaxFileSize(int):
 
 
 class YtDlpDownloader:
-    """Downloads every clip of a tweet at the best quality available."""
+    """Downloads every clip of a post at the best quality available."""
 
     def __init__(
         self,
+        profile: EngineProfile,
         *,
         cookies: CookieSession | None = None,
         proxy: str | None = None,
     ) -> None:
+        self._profile = profile
         self._cookies = cookies
         self._proxy = proxy
 
@@ -149,7 +147,7 @@ class YtDlpDownloader:
         on_progress: ProgressCallback | None = None,
         max_bytes: int | None = None,
     ) -> list[Clip]:
-        """Fetch the tweet's clips into ``dest``.
+        """Fetch the post's clips into ``dest``.
 
         Runs the (synchronous) extractor off the event loop, and marshals its
         progress callbacks — which fire on that worker thread — back onto the
@@ -213,14 +211,14 @@ class YtDlpDownloader:
                     observed_bytes=limit_hit[0],
                 ) from exc
             if isinstance(exc, DownloadError | ExtractorError):
-                raise _classify(exc) from exc
+                raise _classify(exc, self._profile) from exc
             raise
         if limit_hit:
             raise DownloadTooLarge(
                 limit_bytes=max_bytes or 0,
                 observed_bytes=limit_hit[0],
             )
-        return _clips_from_info(info, url)
+        return _clips_from_info(info, url, self._profile)
 
     def _extract(
         self,
@@ -270,7 +268,7 @@ class YtDlpDownloader:
             "merge_output_format": "mp4",
             "outtmpl": {"default": "%(id)s.%(ext)s"},
             "paths": {"home": str(dest)},
-            "allowed_extractors": _ALLOWED_EXTRACTORS,
+            "allowed_extractors": list(self._profile.allowed_extractors),
             # A tweet holding several videos is a playlist to yt-dlp, and all of
             # them are wanted.
             "noplaylist": False,
@@ -376,51 +374,52 @@ def _human_size(size_bytes: float) -> str:
     return f"{kilobytes:.0f} KB"
 
 
-def _clips_from_info(info: Any, url: str) -> list[Clip]:
+def _clips_from_info(info: Any, url: str, profile: EngineProfile) -> list[Clip]:
     if info is None:
-        raise NoVideoInTweet(f"nothing to download at {url}")
+        raise NoVideoInPost(f"nothing to download at {url}")
     entries = info["entries"] if info.get("_type") == "playlist" else [info]
-    clips = [clip for entry in entries if entry and (clip := _clip_from_entry(entry, url))]
+    clips = [clip for entry in entries if entry and (clip := _clip_from_entry(entry, url, profile))]
     if not clips:
-        raise NoVideoInTweet(f"nothing to download at {url}")
+        raise NoVideoInPost(f"nothing to download at {url}")
     return clips
 
 
-def _clip_from_entry(entry: dict[str, Any], url: str) -> Clip | None:
+def _clip_from_entry(entry: dict[str, Any], url: str, profile: EngineProfile) -> Clip | None:
     path = _downloaded_path(entry)
     if path is None or not path.exists():
         logger.warning("entry of %s reported no file on disk", url)
         return None
     return Clip(
         path=path,
-        tweet_id=_tweet_id(entry),
+        post_id=_post_id(entry),
         uploader=str(entry.get("uploader_id") or entry.get("uploader") or "unknown"),
         upload_date=_upload_date(entry),
-        description=_description(entry),
-        uploader_url=_uploader_url(entry),
+        description=_description(entry, profile),
+        uploader_url=_uploader_url(entry, profile),
     )
 
 
-def _description(entry: dict[str, Any]) -> str:
-    """The tweet's text, without the t.co pointer X appends for the media."""
+def _description(entry: dict[str, Any], profile: EngineProfile) -> str:
+    """The post's text, cleaned of the platform's own link furniture."""
     raw = str(entry.get("description") or "")
-    return _TRAILING_TCO.sub("", raw).strip()
+    return profile.clean_description(raw).strip()
 
 
-def _uploader_url(entry: dict[str, Any]) -> str:
+def _uploader_url(entry: dict[str, Any], profile: EngineProfile) -> str:
     url = entry.get("uploader_url")
     if url:
         return str(url)
     handle = entry.get("uploader_id")
-    return f"https://x.com/{handle}" if handle else ""
+    return profile.profile_url(str(handle)) if handle else ""
 
 
-def _tweet_id(entry: dict[str, Any]) -> str:
+def _post_id(entry: dict[str, Any]) -> str:
     """The id from the link, not the id of the media inside it.
 
-    The X extractor puts the media object's id in `id` and the tweet's own id in
-    `display_id`. External names must be discoverable from the original link
-    (ARCHITECTURE.md D7), or they are not a useful index.
+    The X extractor puts the media object's id in `id` and the post's own id in
+    `display_id`; an extractor with nothing to disambiguate sets only `id`, and
+    that is the post's. External names must be discoverable from the original
+    link (ARCHITECTURE.md D7), or they are not a useful index.
     """
     return str(entry.get("display_id") or entry.get("id") or "unknown")
 
@@ -460,20 +459,25 @@ def _strip_login_hint(text: str) -> str:
     return text
 
 
-def _classify(exc: Exception) -> Exception:
-    """Map yt-dlp's one exception type onto the failure taxonomy."""
+def _classify(exc: Exception, profile: EngineProfile) -> Exception:
+    """Map yt-dlp's one exception type onto the failure taxonomy.
+
+    The order is the platform's, not the engine's: an account state is checked
+    before authentication because platforms phrase "you may not see this" and
+    "we do not know you" in the same words.
+    """
     detail = str(exc)
     text = _strip_login_hint(detail).lower()
     if any(marker in text for marker in _NETWORK_MARKERS):
         return NetworkUnavailable(detail)
-    if any(marker in text for marker in _ACCOUNT_STATE_MARKERS):
-        return TweetUnavailable(detail)
-    if any(marker in text for marker in _AUTH_MARKERS):
+    if any(marker in text for marker in profile.account_state_markers):
+        return PostUnavailable(detail)
+    if any(marker in text for marker in profile.auth_markers):
         return AuthExpired(detail)
-    if any(marker in text for marker in _NO_VIDEO_MARKERS):
-        return NoVideoInTweet(detail)
-    if any(marker in text for marker in _UNAVAILABLE_MARKERS):
-        return TweetUnavailable(detail)
+    if any(marker in text for marker in (*profile.no_video_markers, *_ENGINE_NO_VIDEO_MARKERS)):
+        return NoVideoInPost(detail)
+    if any(marker in text for marker in profile.unavailable_markers):
+        return PostUnavailable(detail)
     return DownloadFailed(detail)
 
 

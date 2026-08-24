@@ -13,13 +13,17 @@ from clipivore.services.overflow import (
     OverflowChoice,
     OverflowState,
 )
+from clipivore.services.providers import ProviderCatalog
 
 HELP = (
-    "Send me a link to an X post and I'll download the video from it.\n\n"
-    "Links look like https://x.com/i/status/0 — t.co short links work too, "
-    "and a message may hold several links at once.\n\n"
+    "Send me a link to a post and I'll download the video from it.\n\n"
+    "{providers}\n\n"
+    "A message may hold several links at once. "
     "Clips up to {max_mb} MB arrive here in the chat. {overflow}"
 )
+HELP_PROVIDER = "• {provider}: {hint}"
+HELP_PROVIDER_BROKEN = "• {provider}: unavailable — the owner needs to check the bot's log."
+HELP_NO_PROVIDERS = "No sources are configured right now — the owner needs to check the bot's log."
 
 HELP_OVERFLOW_READY = "Larger clips are delivered through {adapter}."
 HELP_OVERFLOW_OFF = "Larger clips cannot be delivered while Overflow delivery is off."
@@ -30,15 +34,18 @@ HELP_OVERFLOW_MISCONFIGURED = (
     "Larger clips cannot be delivered because Overflow delivery is configured incorrectly."
 )
 
-NO_LINK = "No tweet link found. Send me a link to an X post."
-NOT_A_TWEET = "That short link doesn't lead to a tweet."
+NO_LINK = "No link I recognise. Send me a link to a post — /help lists what I can download."
+NOT_A_POST = "That short link doesn't lead to a post on {provider}."
+PROVIDER_MISCONFIGURED = (
+    "Downloads from {provider} are configured incorrectly. The owner needs to check the bot's log."
+)
 
 QUEUED = "Queued…"
 QUEUED_POSITION = "Queued — {position} in line."
 QUEUE_FULL = "Queue is full ({limit} requests). Try again in a few minutes."
 DOWNLOADING = "Downloading…"
 DOWNLOADING_PROGRESS = "Downloading… {progress}"
-# X clips usually arrive as separate video and audio files, each reporting its
+# Clips usually arrive as separate video and audio files, each reporting its
 # own 0→100%; naming the stream keeps the second run from looking like a restart.
 DOWNLOADING_VIDEO_PROGRESS = "Downloading video… {progress}"
 DOWNLOADING_AUDIO_PROGRESS = "Downloading audio… {progress}"
@@ -46,14 +53,16 @@ UPLOADING = "Uploading to Telegram… ({size})"
 UPLOADING_MANY = "Uploading to Telegram… ({index}/{total}, {size})"
 DELIVERING_OVERFLOW = "Too big for Telegram — delivering through {adapter}…"
 SENT = "Sent."
-# The label bot/captions.py wraps into the link to the tweet itself.
-OPEN_IN_X = "Open in X"
+# The label bot/captions.py wraps into the link to the post itself.
+OPEN_IN = "Open in {provider}"
 
 OVERFLOW_RESULT = "Too big for Telegram ({size}). Delivered through {adapter}:\n{location}"
 
-NO_VIDEO = "That tweet has no video in it."
-TWEET_UNAVAILABLE = "Can't reach that tweet — it may be deleted, protected or suspended."
-NETWORK_UNAVAILABLE = "Can't reach X right now (network or proxy is down). Try again later."
+NO_VIDEO = "That post has no video in it."
+POST_UNAVAILABLE = "Can't reach that post — it may be deleted, protected or suspended."
+NETWORK_UNAVAILABLE = (
+    "Can't reach {provider} right now (network or proxy is down). Try again later."
+)
 DOWNLOAD_FAILED = "Download failed. The details are in the bot's log."
 OVERFLOW_FAILED = "Downloaded it, but {adapter} couldn't complete Overflow delivery."
 OVERFLOW_DISABLED = (
@@ -84,11 +93,13 @@ OVERFLOW_NOT_SELECTABLE = "That Overflow Adapter is not available."
 OVERFLOW_SAVE_FAILED = "Couldn't save the Overflow delivery selection. See the bot's log."
 OVERFLOW_SELECTED = "Selected {adapter}."
 TIMED_OUT = "Gave up after {minutes} minutes — the video is too long or the link is too slow."
-AUTH_EXPIRED = "Can't download right now: the owner's X session needs renewing. Owner notified."
+AUTH_EXPIRED = (
+    "Can't download right now: the owner's {provider} session needs renewing. Owner notified."
+)
 
 OWNER_AUTH_EXPIRED = (
-    "X rejected the stored cookies — export cookies.txt from the browser again and "
-    "replace {path} on the server.\n\nX said: {detail}"
+    "{provider} rejected the stored cookies — export cookies.txt from the browser again and "
+    "replace {path} on the server.\n\n{provider} said: {detail}"
 )
 
 FFMPEG_MISSING = (
@@ -97,7 +108,7 @@ FFMPEG_MISSING = (
 )
 
 
-def help_message(max_mb: int, overflow: OverflowChoice) -> str:
+def help_message(max_mb: int, overflow: OverflowChoice, providers: ProviderCatalog) -> str:
     if overflow.state is OverflowState.READY:
         detail = HELP_OVERFLOW_READY.format(adapter=overflow.label)
     elif overflow.state is OverflowState.MISSING:
@@ -106,7 +117,25 @@ def help_message(max_mb: int, overflow: OverflowChoice) -> str:
         detail = HELP_OVERFLOW_MISCONFIGURED
     else:
         detail = HELP_OVERFLOW_OFF
-    return HELP.format(max_mb=max_mb, overflow=detail)
+    return HELP.format(max_mb=max_mb, overflow=detail, providers=_provider_lines(providers))
+
+
+def _provider_lines(providers: ProviderCatalog) -> str:
+    """What the bot can be sent, one line each — including what is broken.
+
+    A Provider that cannot serve is listed as unavailable rather than hidden:
+    somebody whose link is being refused deserves to see that the bot knows the
+    platform and has a problem with it, not that it never heard of it.
+    """
+    lines = [
+        (
+            HELP_PROVIDER.format(provider=choice.name, hint=choice.cls.hint)
+            if choice.ready and choice.cls is not None
+            else HELP_PROVIDER_BROKEN.format(provider=choice.name)
+        )
+        for choice in providers.choices
+    ]
+    return "\n".join(lines) if lines else HELP_NO_PROVIDERS
 
 
 def downloading_progress(stream: str, progress: str) -> str:

@@ -105,16 +105,16 @@ class ClipDelivery:
 
 
 def overflow_name(clip: Clip, *, index: int = 1, total: int = 1) -> str:
-    """``<date>-<uploader>-<tweet id>.mp4``, disambiguated for several clips.
+    """``<date>-<uploader>-<post id>.mp4``, disambiguated for several clips.
 
-    Sortable by date first and greppable by author or tweet id, independent of
+    Sortable by date first and greppable by author or post id, independent of
     the selected external destination.
     """
     uploader = _safe(clip.uploader)
-    tweet_id = _safe(clip.tweet_id)
+    post_id = _safe(clip.post_id)
     suffix = f"-{index}" if total > 1 else ""
     extension = clip.path.suffix if _EXTENSION.fullmatch(clip.path.suffix) else ".mp4"
-    return f"{clip.upload_date:%Y-%m-%d}-{uploader}-{tweet_id}{suffix}{extension}"
+    return f"{clip.upload_date:%Y-%m-%d}-{uploader}-{post_id}{suffix}{extension}"
 
 
 def _safe(value: str) -> str:

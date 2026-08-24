@@ -15,6 +15,7 @@ from aiogram.types import User as TgUser
 
 from clipivore.runtime.worker import RequestQueue
 from clipivore.services.overflow import OverflowCatalog
+from clipivore.services.providers import ProviderCatalog
 
 M = TypeVar("M", bound=TelegramMethod[Any])
 
@@ -154,6 +155,7 @@ class BotHarness:
     session: RecordingSession
     queue: RequestQueue
     overflow_catalog: OverflowCatalog
+    provider_catalog: ProviderCatalog
     _next_update_id: int = field(default=1)
 
     def _update_id(self) -> int:

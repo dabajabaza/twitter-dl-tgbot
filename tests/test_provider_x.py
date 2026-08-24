@@ -1,15 +1,39 @@
+"""X as a Provider: the link shapes it claims, and the t.co guard.
+
+The redirect tests assert on *which URLs were requested*, not only on the
+exception: the guard under test is "the bot never even asks".
+"""
+
 from dataclasses import dataclass
 
 import pytest
 
-from clipivore.errors import NotATweetLink
-from clipivore.services.links import (
-    extract_links,
-    is_short_link,
-    is_tweet_link,
-    resolve_short_link,
-    tweet_id,
-)
+from clipivore.errors import NotAPostLink
+from clipivore.providers.x import _ALLOWED_HOSTS, XProvider
+from clipivore.services.providers import ProviderCatalog, ProviderContext
+from clipivore.services.redirects import follow
+
+CATALOG = ProviderCatalog(ProviderContext())
+
+
+def extract_links(*sources: str | None) -> list[str]:
+    return [link.url for link in CATALOG.extract(*sources)]
+
+
+def is_tweet_link(url: str) -> bool:
+    return bool(XProvider.post_link.match(url))
+
+
+def is_short_link(url: str) -> bool:
+    return XProvider.is_short(url)
+
+
+def tweet_id(url: str) -> str | None:
+    return XProvider.post_id(url)
+
+
+async def resolve_short_link(url: str, *, proxy: str | None = None) -> str:
+    return await XProvider(ProviderContext(proxy=proxy)).resolve(url)
 
 
 @pytest.mark.parametrize(
@@ -25,7 +49,7 @@ from clipivore.services.links import (
         "https://x.com/i/web/status/1234567890",
     ],
 )
-def test_every_spelling_of_a_tweet_link_in_the_wild_is_recognised(url: str) -> None:
+def test_every_spelling_of_an_x_post_link_in_the_wild_is_recognised(url: str) -> None:
     assert extract_links(url) == [url]
     assert is_tweet_link(url)
 
@@ -39,7 +63,7 @@ def test_every_spelling_of_a_tweet_link_in_the_wild_is_recognised(url: str) -> N
         "https://example.com/someone/status/123",
     ],
 )
-def test_things_that_are_not_tweet_links_are_left_alone(text: str) -> None:
+def test_things_no_provider_claims_are_left_alone(text: str) -> None:
     assert extract_links(text) == []
 
 
@@ -176,11 +200,30 @@ class TestShortLinkResolution:
     async def test_a_link_that_is_not_even_on_x_is_never_requested(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # Straight at the follower with X's allowlist: nothing outside it may be
+        # fetched even as the *entry* URL. The Provider only ever hands it a
+        # claimed t.co link, so this is the belt under the braces.
         http = RecordingHttp([Hop()]).install(monkeypatch)
 
-        with pytest.raises(NotATweetLink):
-            await resolve_short_link("https://evil.example/redirect")
+        with pytest.raises(NotAPostLink):
+            await follow(
+                "https://evil.example/redirect",
+                allowed_hosts=_ALLOWED_HOSTS,
+                is_target=is_tweet_link,
+                find_targets=lambda text: [],
+                outside_message="leads outside X",
+            )
 
+        assert http.requested == []
+
+    async def test_a_link_no_provider_claims_is_left_untouched(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # resolve() is only ever called with a claimed link, and a direct post
+        # link resolves to itself without touching the network.
+        http = RecordingHttp([Hop()]).install(monkeypatch)
+
+        assert await resolve_short_link(TWEET) == TWEET
         assert http.requested == []
 
     async def test_a_redirect_pointing_into_the_lan_is_never_followed(
@@ -196,7 +239,7 @@ class TestShortLinkResolution:
             monkeypatch
         )
 
-        with pytest.raises(NotATweetLink):
+        with pytest.raises(NotAPostLink):
             await resolve_short_link("https://t.co/AbC123")
 
         assert http.requested == ["https://t.co/AbC123"]
@@ -247,7 +290,7 @@ class TestShortLinkResolution:
             monkeypatch
         )
 
-        with pytest.raises(NotATweetLink):
+        with pytest.raises(NotAPostLink):
             await resolve_short_link("https://t.co/AbC123")
 
         assert http.requested == ["https://t.co/AbC123"]
@@ -255,7 +298,7 @@ class TestShortLinkResolution:
     async def test_a_redirect_loop_inside_x_gives_up(self, monkeypatch: pytest.MonkeyPatch) -> None:
         http = RecordingHttp([Hop(status=301, location="https://t.co/Loop")]).install(monkeypatch)
 
-        with pytest.raises(NotATweetLink):
+        with pytest.raises(NotAPostLink):
             await resolve_short_link("https://t.co/AbC123")
 
         # The literal, not _MAX_REDIRECTS: comparing the code against itself
@@ -270,5 +313,5 @@ class TestShortLinkResolution:
             [Hop(status=200, body=b"<html>nothing here</html>", url="https://t.co/AbC123")]
         ).install(monkeypatch)
 
-        with pytest.raises(NotATweetLink):
+        with pytest.raises(NotAPostLink):
             await resolve_short_link("https://t.co/AbC123")

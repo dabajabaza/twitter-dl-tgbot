@@ -5,10 +5,10 @@ details here — those live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## People
 
-**Owner** — the single person who owns the bot. Their X account is what gives it
-any rights at all (see *Cookie session*), and they are the only recipient of
-operational alerts. Always on the guest list, even if their id was left out of
-`ALLOWED_IDS`.
+**Owner** — the single person who owns the bot. Their own account on a Provider
+is what gives it any rights at all (see *Cookie session*), and they are the only
+recipient of operational alerts. Always on the guest list, even if their id was
+left out of `ALLOWED_IDS`.
 
 **Guest** — an allowed user who is not the Owner. Same download rights, no
 alerts. Every request of theirs runs under the Owner's account — which is why
@@ -19,22 +19,28 @@ any kind would confirm that the bot exists and is alive.
 
 ## The work
 
-**Tweet link** — a URL naming a single post on X. It arrives either direct
-(`x.com/<user>/status/<id>`, plus the historical `twitter.com` and `mobile.`
-spellings) or wrapped (`t.co/<slug>`, which says nothing about its target until
-it is followed).
+**Provider** — a platform the bot can download from. Every Post link belongs to
+exactly one Provider. A Provider the bot cannot currently serve is announced by
+name rather than hidden, and never takes the others down with it.
 
-**Request** — one link accepted from one user. It holds one queue slot and
-lives until it has a verdict. The same link sent twice in one message produces
-a single Request. Every Request remembers the Source message it came from.
+**Post link** — a URL naming a single post on a Provider. It arrives either
+direct (`x.com/<user>/status/<id>`, plus the historical `twitter.com` and
+`mobile.` spellings) or wrapped in that Provider's short link (`t.co/<slug>`,
+which says nothing about its target until it is followed).
+
+**Request** — one Post link accepted from one user. It holds one queue slot and
+lives until it has a verdict, and it remembers which Provider claimed the link —
+so every verdict can name the platform. The same link sent twice in one message
+produces a single Request. Every Request remembers the Source message it came
+from.
 
 **Source message** — the user's message a batch of Requests was spawned from.
 It is deleted once every Request from it succeeded; any failure — including a
 link refused by a full queue — leaves it in place, so the person keeps the link
 to retry.
 
-**Clip** — one video file extracted from a tweet. A tweet may yield several; an
-X "GIF" is a Clip too (a looping, audio-less mp4), not a separate kind of thing.
+**Clip** — one video file extracted from a post. A post may yield several; an X
+"GIF" is a Clip too (a looping, audio-less mp4), not a separate kind of thing.
 
 **Verdict** — how a Request ended: the clips were delivered, or the reason was
 named. Silence is never an outcome — the status message always reaches a final
@@ -71,7 +77,8 @@ failure of that delivery rather than a lasting configuration state.
 
 **Share delivery** — Overflow delivery to the *Share*; the chat gets its path.
 
-**Share** — the SMB directory on the home router (`KeeneticShared/twitter-dl`)
+**Share** — the SMB directory on the home router (`KeeneticShared/twitter-dl`,
+named before the bot was)
 where clips too large for Telegram are filed. There is no retention policy: the
 file name is its only index.
 
@@ -79,13 +86,15 @@ file name is its only index.
 chat gets a public link that anyone holding it can open. The file and its link
 remain until the Owner removes them manually; there is no automatic retention.
 
-## Access to X
+## Access to a Provider
 
-**Cookie session** — the Owner's X session, exported from a browser
-(`cookies.txt`). It is how the bot identifies itself to X; without it only
-public tweets are reachable.
+**Cookie session** — the Owner's session with one Provider, exported from a
+browser (`cookies.txt`). It is how the bot identifies itself there; a Provider
+without one reaches only public posts. Today only X has one — public posts on
+other Providers need none.
 
-**Auth expiry** — the state in which the Cookie session no longer
-authenticates. Treacherous because public tweets keep downloading: from the
+**Auth expiry** — the state in which a Provider's Cookie session no longer
+authenticates. Treacherous because public posts keep downloading: from the
 outside everything still "works" while NSFW, age-gated and protected content
-quietly stops. The only breakage worth waking the Owner for.
+quietly stops. The only breakage worth waking the Owner for, and the alert names
+the Provider.
