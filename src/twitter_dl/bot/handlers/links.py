@@ -12,7 +12,7 @@ from aiogram.types import Message
 from twitter_dl.bot import texts
 from twitter_dl.bot.progress import ProgressReporter
 from twitter_dl.config import Settings
-from twitter_dl.runtime.worker import Request, RequestQueue
+from twitter_dl.runtime.worker import Request, RequestQueue, SourceMessage
 from twitter_dl.services.links import extract_links
 from twitter_dl.services.overflow import OverflowCatalog
 
@@ -53,6 +53,11 @@ async def enqueue_links(
     if user is None:
         return
 
+    # Created before the first await: the count must be settled while no
+    # request can possibly have finished yet.
+    source = SourceMessage(
+        bot, chat_id=message.chat.id, message_id=message.message_id, expected=len(urls)
+    )
     for url in urls:
         status = await message.answer(texts.QUEUED)
         reporter = ProgressReporter(bot, chat_id=status.chat.id, message_id=status.message_id)
@@ -62,10 +67,14 @@ async def enqueue_links(
             user_id=user.id,
             reporter=reporter,
             overflow=overflow_catalog.current,
+            source=source,
         )
         try:
             position = queue.submit(request)
         except asyncio.QueueFull:
+            # The refused link and the skipped ones never become Requests, so
+            # the message must survive however the accepted ones end.
+            source.abandon()
             await reporter.finish(texts.QUEUE_FULL.format(limit=settings.queue_limit))
             # Every remaining link in this message would meet the same full
             # queue, and repeating the refusal per link is just noise.

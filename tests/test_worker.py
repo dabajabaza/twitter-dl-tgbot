@@ -13,6 +13,7 @@ from aiogram.methods import DeleteMessage, EditMessageText, SendMessage
 from tests.helpers.bot_harness import BotHarness
 from tests.helpers.factories import OWNER_ID, build_settings, make_clip
 from twitter_dl.bot import texts
+from twitter_dl.bot.captions import build_caption
 from twitter_dl.bot.progress import ProgressReporter
 from twitter_dl.config import Settings
 from twitter_dl.domain import Clip, ProgressCallback
@@ -22,6 +23,7 @@ from twitter_dl.runtime.worker import (
     Request,
     RequestQueue,
     RequestWorker,
+    SourceMessage,
 )
 from twitter_dl.services.cookies import CookieSession
 from twitter_dl.services.delivery import ChatDelivery, DeliveryResult, OverflowDelivery
@@ -115,11 +117,17 @@ READY = OverflowChoice(
 )
 
 
+# The user's message and the status message must be told apart in DeleteMessage
+# asserts: the status one is 777 (or 5001+ for harness-created), the user's 555.
+USER_MESSAGE_ID = 555
+
+
 def make_request(
     harness: BotHarness,
     url: str = TWEET,
     *,
     overflow: OverflowChoice = OFF,
+    source: SourceMessage | None = None,
 ) -> Request:
     reporter = ProgressReporter(harness.bot, chat_id=OWNER_ID, message_id=777, min_interval=0.0)
     return Request(
@@ -128,7 +136,18 @@ def make_request(
         user_id=OWNER_ID,
         reporter=reporter,
         overflow=overflow,
+        source=source,
     )
+
+
+def make_source(harness: BotHarness, *, expected: int = 1) -> SourceMessage:
+    return SourceMessage(
+        harness.bot, chat_id=OWNER_ID, message_id=USER_MESSAGE_ID, expected=expected
+    )
+
+
+def deleted_ids(harness: BotHarness) -> list[int]:
+    return [call.message_id for call in harness.session.calls_of(DeleteMessage)]
 
 
 @asynccontextmanager
@@ -186,7 +205,10 @@ async def test_a_clip_is_delivered_and_the_status_message_steps_aside(
         harness.queue.submit(make_request(harness))
         await drain(harness.queue)
 
-    assert [caption for _, caption, _, _, _ in delivery.delivered] == [TWEET]
+    # make_clip carries no tweet text, so the caption is just the footer.
+    assert [caption for _, caption, _, _, _ in delivery.delivered] == [
+        build_caption("", TWEET, uploader="someone")
+    ]
     # The video itself is the answer, so the progress message is removed.
     assert harness.session.calls_of(DeleteMessage)
 
@@ -290,9 +312,149 @@ async def test_an_oversized_clip_is_reported_by_its_overflow_locator(
         harness.queue.submit(make_request(harness, overflow=READY))
         await drain(harness.queue)
 
-    assert any(overflow.location in text for text in edited_texts(harness))
+    verdict = next(text for text in edited_texts(harness) if overflow.location in text)
+    # The source message is deleted on success, so the verdict itself must
+    # carry the tweet's footer.
+    assert texts.OPEN_IN_X in verdict
+    finish = next(
+        call
+        for call in harness.session.calls_of(EditMessageText)
+        if call.text and overflow.location in call.text
+    )
+    assert finish.parse_mode == "HTML"
     # The path IS the result, so nothing is deleted.
     assert not harness.session.calls_of(DeleteMessage)
+
+
+async def test_the_overflow_verdict_escapes_the_tweets_text(
+    harness: BotHarness, settings: Settings
+) -> None:
+    overflow = OverflowDelivery(
+        size_bytes=120 * 1024 * 1024,
+        adapter_label="Share",
+        location=r"\\router\share\clip.mp4",
+    )
+    downloader = FakeDownloader(clips=lambda dest: [make_clip(dest, description='a "<b>&" tweet')])
+    worker = build_worker(
+        harness, settings, downloader=downloader, delivery=FakeDelivery(result=overflow)
+    )
+
+    async with running(worker):
+        harness.queue.submit(make_request(harness, overflow=READY))
+        await drain(harness.queue)
+
+    verdict = next(text for text in edited_texts(harness) if overflow.location in text)
+    assert "a &quot;&lt;b&gt;&amp;&quot; tweet" in verdict
+    assert "<b>" not in verdict
+
+
+class TestSourceMessageCleanup:
+    """The user's own message goes away only once everything it asked for
+    arrived; any failure leaves it in place so the link is not lost."""
+
+    async def test_a_delivered_request_deletes_the_users_message(
+        self, harness: BotHarness, settings: Settings
+    ) -> None:
+        worker = build_worker(harness, settings)
+
+        async with running(worker):
+            harness.queue.submit(make_request(harness, source=make_source(harness)))
+            await drain(harness.queue)
+
+        assert USER_MESSAGE_ID in deleted_ids(harness)
+
+    async def test_a_failed_request_leaves_the_users_message_alone(
+        self, harness: BotHarness, settings: Settings
+    ) -> None:
+        worker = build_worker(
+            harness, settings, downloader=FakeDownloader(error=NoVideoInTweet("x"))
+        )
+
+        async with running(worker):
+            harness.queue.submit(make_request(harness, source=make_source(harness)))
+            await drain(harness.queue)
+
+        assert USER_MESSAGE_ID not in deleted_ids(harness)
+
+    async def test_an_unexpected_crash_counts_as_a_failure(
+        self, harness: BotHarness, settings: Settings
+    ) -> None:
+        worker = build_worker(
+            harness, settings, downloader=FakeDownloader(error=RuntimeError("nobody predicted"))
+        )
+
+        async with running(worker):
+            harness.queue.submit(make_request(harness, source=make_source(harness)))
+            await drain(harness.queue)
+
+        assert USER_MESSAGE_ID not in deleted_ids(harness)
+
+    async def test_a_message_with_two_links_is_deleted_once_after_the_second(
+        self, harness: BotHarness, settings: Settings
+    ) -> None:
+        worker = build_worker(harness, settings)
+        source = make_source(harness, expected=2)
+
+        async with running(worker):
+            harness.queue.submit(make_request(harness, source=source))
+            await drain(harness.queue)
+            first_round = deleted_ids(harness).count(USER_MESSAGE_ID)
+            harness.queue.submit(make_request(harness, source=source))
+            await drain(harness.queue)
+
+        assert first_round == 0
+        assert deleted_ids(harness).count(USER_MESSAGE_ID) == 1
+
+    async def test_one_failed_link_keeps_the_whole_message(
+        self, harness: BotHarness, settings: Settings
+    ) -> None:
+        source = make_source(harness, expected=2)
+        failing = build_worker(
+            harness, settings, downloader=FakeDownloader(error=TweetUnavailable("gone"))
+        )
+        async with running(failing):
+            harness.queue.submit(make_request(harness, source=source))
+            await drain(harness.queue)
+        succeeding = build_worker(harness, settings)
+        async with running(succeeding):
+            harness.queue.submit(make_request(harness, source=source))
+            await drain(harness.queue)
+
+        assert USER_MESSAGE_ID not in deleted_ids(harness)
+
+    async def test_an_overflow_delivery_also_counts_as_success(
+        self, harness: BotHarness, settings: Settings
+    ) -> None:
+        overflow = OverflowDelivery(
+            size_bytes=120 * 1024 * 1024,
+            adapter_label="Share",
+            location=r"\\router\share\clip.mp4",
+        )
+        worker = build_worker(harness, settings, delivery=FakeDelivery(result=overflow))
+
+        async with running(worker):
+            harness.queue.submit(make_request(harness, overflow=READY, source=make_source(harness)))
+            await drain(harness.queue)
+
+        # Only the user's message goes: the status message IS the locator now.
+        assert deleted_ids(harness) == [USER_MESSAGE_ID]
+
+    async def test_a_deletion_that_fails_does_not_take_the_worker_with_it(
+        self, harness: BotHarness, settings: Settings
+    ) -> None:
+        harness.session.fail_on["DeleteMessage"] = ClientDecodeError(
+            message="not JSON", original=ValueError("boom"), data="<html>502</html>"
+        )
+        downloader = FakeDownloader()
+        worker = build_worker(harness, settings, downloader=downloader)
+
+        async with running(worker) as task:
+            harness.queue.submit(make_request(harness, source=make_source(harness)))
+            await drain(harness.queue)
+            assert not task.done()
+
+        assert harness.queue.load == 0
+        assert downloader.destinations
 
 
 async def test_the_scratch_directory_never_outlives_the_request(

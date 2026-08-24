@@ -89,6 +89,22 @@ async def test_the_last_word_stops_further_updates(harness: BotHarness) -> None:
     assert edits(harness)[-1] == "Gave up after 30 minutes."
 
 
+async def test_the_last_word_can_carry_markup_when_asked_to(harness: BotHarness) -> None:
+    reporter = build_reporter(harness)
+
+    await reporter.finish('<a href="https://x.com/a">Open in X</a>', parse_mode="HTML")
+
+    assert harness.session.calls_of(EditMessageText)[-1].parse_mode == "HTML"
+
+
+async def test_a_plain_finish_sends_no_parse_mode(harness: BotHarness) -> None:
+    reporter = build_reporter(harness)
+
+    await reporter.finish("Sent.")
+
+    assert harness.session.calls_of(EditMessageText)[-1].parse_mode is None
+
+
 async def test_a_delivered_video_replaces_the_status_message(harness: BotHarness) -> None:
     reporter = build_reporter(harness)
     await reporter.set("Uploading to Telegram…")

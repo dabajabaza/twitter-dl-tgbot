@@ -42,7 +42,16 @@ def make_clip(
     uploader: str = "someone",
     upload_date: date = date(2026, 8, 13),
     name: str = "clip.mp4",
+    description: str = "",
+    uploader_url: str = "",
 ) -> Clip:
     path = tmp_path / name
     path.write_bytes(b"\0" * size_bytes)
-    return Clip(path=path, tweet_id=tweet_id, uploader=uploader, upload_date=upload_date)
+    return Clip(
+        path=path,
+        tweet_id=tweet_id,
+        uploader=uploader,
+        upload_date=upload_date,
+        description=description,
+        uploader_url=uploader_url,
+    )

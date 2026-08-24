@@ -7,6 +7,7 @@ of them sooner — it would only make progress percentages and timeouts lie
 """
 
 import asyncio
+import html
 import logging
 import shutil
 import tempfile
@@ -16,8 +17,10 @@ from pathlib import Path
 from typing import Protocol
 
 from aiogram import Bot
+from aiogram.enums import ParseMode
 
 from twitter_dl.bot import texts
+from twitter_dl.bot.captions import build_caption
 from twitter_dl.bot.progress import ProgressReporter
 from twitter_dl.config import Settings
 from twitter_dl.domain import Clip, ProgressCallback
@@ -78,6 +81,45 @@ class Delivery(Protocol):
     ) -> DeliveryResult: ...
 
 
+class SourceMessage:
+    """The user's message a batch of Requests was spawned from.
+
+    Deleted only when every Request from it succeeded — one link that failed
+    means the person still needs the message to retry. ``expected`` is fixed
+    synchronously in the handler before its first await, so a request that
+    finishes while later links are still being enqueued cannot see a zero
+    pending count and delete the message early.
+    """
+
+    def __init__(self, bot: Bot, *, chat_id: int, message_id: int, expected: int) -> None:
+        self._bot = bot
+        self._chat_id = chat_id
+        self._message_id = message_id
+        self._pending = expected
+        self._failed = False
+
+    def abandon(self) -> None:
+        """Some links never became Requests (full queue): the message survives."""
+        self._failed = True
+
+    async def resolve(self, *, succeeded: bool) -> None:
+        """One Request's terminal outcome.
+
+        Never raises, and the failure path never suspends: it runs from a
+        ``finally`` that may be unwinding a CancelledError.
+        """
+        self._pending -= 1
+        if not succeeded:
+            self._failed = True
+        if self._pending == 0 and not self._failed:
+            try:
+                await self._bot.delete_message(chat_id=self._chat_id, message_id=self._message_id)
+            except Exception as exc:
+                # Cosmetic, like the status-message delete: a bot may not
+                # delete messages older than 48 hours.
+                logger.debug("could not delete source message %s: %s", self._message_id, exc)
+
+
 @dataclass
 class Request:
     """One tweet link accepted from one user, holding one queue slot."""
@@ -87,6 +129,7 @@ class Request:
     user_id: int
     reporter: ProgressReporter
     overflow: OverflowChoice
+    source: SourceMessage | None = None
 
 
 class RequestQueue:
@@ -213,6 +256,7 @@ class RequestWorker:
 
     async def _process(self, request: Request) -> None:
         scratch = Path(tempfile.mkdtemp(dir=self._settings.download_dir, prefix="req-"))
+        succeeded = False
         try:
             async with asyncio.timeout(self._settings.download_timeout_s):
                 await request.reporter.set(texts.DOWNLOADING)
@@ -232,7 +276,8 @@ class RequestWorker:
             # edit cancelled the edit itself, freezing the status message on
             # "Uploading…" forever. On an Overflow route that would lose the
             # only locator returned by the Adapter (D7).
-            await self._announce(request, overflows)
+            await self._announce(request, url=url, clips=clips, overflows=overflows)
+            succeeded = True
         except TimeoutError:
             minutes = self._settings.download_timeout_s // 60
             logger.warning("request for %s timed out after %s min", request.url, minutes)
@@ -271,6 +316,12 @@ class RequestWorker:
             # The scratch directory holds the whole clip, so leaving it behind
             # would fill the jail's dataset a few requests later.
             shutil.rmtree(scratch, ignore_errors=True)
+            # Every way out of this method lands here exactly once — the typed
+            # verdicts above, a TimeoutError, an unexpected exception on its
+            # way to run()'s catch-all, and cancellation — so this is the one
+            # place the source message learns how its request ended.
+            if request.source is not None:
+                await request.source.resolve(succeeded=succeeded)
 
     async def _resolve(self, url: str) -> str:
         if not is_short_link(url):
@@ -297,7 +348,12 @@ class RequestWorker:
             result = await self._delivery.deliver(
                 clip,
                 chat_id=request.chat_id,
-                caption=url,
+                caption=build_caption(
+                    clip.description,
+                    url,
+                    uploader=clip.uploader,
+                    uploader_url=clip.uploader_url,
+                ),
                 overflow=request.overflow,
                 index=index,
                 total=total,
@@ -306,22 +362,44 @@ class RequestWorker:
                 overflows.append(result)
         return overflows
 
-    async def _announce(self, request: Request, overflows: list[OverflowDelivery]) -> None:
+    async def _announce(
+        self,
+        request: Request,
+        *,
+        url: str,
+        clips: list[Clip],
+        overflows: list[OverflowDelivery],
+    ) -> None:
         """The request's last word, once the clips are already delivered."""
         if not overflows:
             # Every clip made it into the chat, so the status message has
             # nothing left to say and the videos speak for themselves.
             await request.reporter.replace_with_upload()
             return
-        await request.reporter.finish(
-            "\n\n".join(
+        blocks = [
+            # The locator and label are foreign text; under an HTML parse mode
+            # they must not be able to parse as markup.
+            html.escape(
                 texts.OVERFLOW_RESULT.format(
                     size=texts.human_size(overflow.size_bytes),
                     adapter=overflow.adapter_label,
                     location=overflow.location,
                 )
-                for overflow in overflows
             )
+            for overflow in overflows
+        ]
+        # The verdict carries the tweet's text and links itself: the source
+        # message is deleted on success, so this is where they survive.
+        first = clips[0] if clips else None
+        tail = build_caption(
+            first.description if first else "",
+            url,
+            uploader=first.uploader if first else "",
+            uploader_url=first.uploader_url if first else "",
+        )
+        await request.reporter.finish(
+            "\n\n".join([*blocks, tail]),
+            parse_mode=ParseMode.HTML,
         )
 
 

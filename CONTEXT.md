@@ -26,7 +26,12 @@ it is followed).
 
 **Request** — one link accepted from one user. It holds one queue slot and
 lives until it has a verdict. The same link sent twice in one message produces
-a single Request.
+a single Request. Every Request remembers the Source message it came from.
+
+**Source message** — the user's message a batch of Requests was spawned from.
+It is deleted once every Request from it succeeded; any failure — including a
+link refused by a full queue — leaves it in place, so the person keeps the link
+to retry.
 
 **Clip** — one video file extracted from a tweet. A tweet may yield several; an
 X "GIF" is a Clip too (a looping, audio-less mp4), not a separate kind of thing.

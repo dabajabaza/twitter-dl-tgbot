@@ -311,6 +311,56 @@ class TestClipsFromInfo:
 
         assert clips[0].upload_date == date.today()
 
+    def test_the_tweets_text_survives_into_the_clip(self, tmp_path: Path) -> None:
+        video = tmp_path / "a.mp4"
+        video.write_bytes(b"x")
+        entry = self._entry(video, description="Cats!", uploader_url="https://x.com/someone")
+
+        clips = module._clips_from_info(entry, TWEET)
+
+        assert clips[0].description == "Cats!"
+        assert clips[0].uploader_url == "https://x.com/someone"
+
+    def test_the_trailing_media_pointer_is_stripped_from_the_text(self, tmp_path: Path) -> None:
+        video = tmp_path / "a.mp4"
+        video.write_bytes(b"x")
+        # X appends its own t.co link to the media; both schemes occur, and a
+        # tweet with several media gets several. One in mid-sentence is the
+        # author's own words and stays.
+        entry = self._entry(
+            video,
+            description="see https://t.co/InThEmIdDle ok https://t.co/AbC123 http://t.co/dEf456",
+        )
+
+        clips = module._clips_from_info(entry, TWEET)
+
+        assert clips[0].description == "see https://t.co/InThEmIdDle ok"
+
+    def test_a_tweet_without_text_yields_an_empty_description(self, tmp_path: Path) -> None:
+        video = tmp_path / "a.mp4"
+        video.write_bytes(b"x")
+
+        clips = module._clips_from_info(self._entry(video, description=None), TWEET)
+
+        assert clips[0].description == ""
+
+    def test_a_missing_profile_url_is_rebuilt_from_the_handle(self, tmp_path: Path) -> None:
+        video = tmp_path / "a.mp4"
+        video.write_bytes(b"x")
+
+        clips = module._clips_from_info(self._entry(video), TWEET)
+
+        assert clips[0].uploader_url == "https://x.com/someone"
+
+    def test_no_handle_at_all_leaves_the_profile_url_empty(self, tmp_path: Path) -> None:
+        video = tmp_path / "a.mp4"
+        video.write_bytes(b"x")
+        entry = self._entry(video, uploader_id=None, uploader="Some One")
+
+        clips = module._clips_from_info(entry, TWEET)
+
+        assert clips[0].uploader_url == ""
+
 
 class TestStayingOnX:
     """A tweet is the only thing this bot is allowed to download."""

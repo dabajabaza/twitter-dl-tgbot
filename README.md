@@ -17,8 +17,11 @@ real account, one uplink.
 - Several links in one message, and several clips in one tweet, are all handled
   in turn.
 - A clip up to 50 MB (the Bot API ceiling) arrives in the chat, captioned with
-  the tweet's link. Delivery of larger clips is optional: the owner can switch
-  between the configured Overflow Adapters from the bot's Menu.
+  the tweet's text and a footer — `@author · Open in X` — linking the author's
+  profile and the tweet. Once everything a message asked for arrived, the
+  message with the link is deleted; any failure leaves it in place. Delivery of
+  larger clips is optional: the owner can switch between the configured
+  Overflow Adapters from the bot's Menu.
 - Built-in Overflow Adapters cover an SMB Share and Yandex Disk through
   `rclone`; a deployment may enable neither, either or both. A custom Adapter is
   one importable `module:create` factory plus its environment configuration.
@@ -101,21 +104,27 @@ uv lock --upgrade-package yt-dlp && uv export --format requirements-txt --no-has
 The automated tests never touch the network, so the X → yt-dlp → Telegram chain
 is only ever exercised by a person. With a test token:
 
-1. An ordinary tweet with a video → the clip arrives, captioned with the link.
+1. An ordinary tweet with a video → the clip arrives, captioned with the
+   tweet's text and a footer whose `@author` opens the profile and whose
+   "Open in X" opens the tweet; the message with the link disappears.
 2. A tweet with several clips → all of them arrive, and the status message
    disappears after the last one.
-3. A tweet with no video → "That tweet has no video in it".
+3. A tweet with no video → "That tweet has no video in it", and the message
+   with the link stays.
 4. Text with no links at all → "No tweet link found".
 5. Six links at once → the sixth is refused with "Queue is full".
 6. `MAX_TG_VIDEO_MB=1` with Overflow delivery off → an explicit size-limit
    verdict and no complete oversized download.
-7. Enable the Share Adapter → the file lands there and the chat gets the path;
-   enable Yandex Disk → the chat gets a working public link.
-8. Remove or break the selected Adapter → small clips still arrive, and a large
+7. Enable the Share Adapter → the file lands there and the chat gets the path
+   plus the tweet's text and footer; enable Yandex Disk → the chat gets a
+   working public link.
+8. One good link and one dead link in the same message → the good one arrives,
+   and the message stays.
+9. Remove or break the selected Adapter → small clips still arrive, and a large
    one names the missing or misconfigured Overflow destination.
-9. A broken `COOKIES_FILE` plus an NSFW tweet → one alert to the owner, a polite
-   refusal to whoever asked.
-10. Proxy switched off for a minute → "Can't reach X right now", and the bot
+10. A broken `COOKIES_FILE` plus an NSFW tweet → one alert to the owner, a
+   polite refusal to whoever asked.
+11. Proxy switched off for a minute → "Can't reach X right now", and the bot
    neither hangs nor dies.
 
 ## Operations

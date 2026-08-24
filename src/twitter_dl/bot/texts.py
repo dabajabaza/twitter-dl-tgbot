@@ -3,7 +3,8 @@
 English throughout, and plain text rather than HTML or Markdown: replies quote
 things the bot does not control — uploader handles, yt-dlp messages, external
 locators full of punctuation — and plain text is the only format none of them
-can break.
+can break. The one exception is the delivery verdict, whose HTML lives in
+bot/captions.py with every foreign string escaped; this module stays plain.
 """
 
 from twitter_dl.services.overflow import (
@@ -41,6 +42,8 @@ UPLOADING = "Uploading to Telegram…"
 UPLOADING_MANY = "Uploading to Telegram… ({index}/{total})"
 DELIVERING_OVERFLOW = "Too big for Telegram — delivering through {adapter}…"
 SENT = "Sent."
+# The label bot/captions.py wraps into the link to the tweet itself.
+OPEN_IN_X = "Open in X"
 
 OVERFLOW_RESULT = "Too big for Telegram ({size}). Delivered through {adapter}:\n{location}"
 
