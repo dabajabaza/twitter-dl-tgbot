@@ -27,6 +27,9 @@ real account, one uplink.
   one importable `module:create` factory plus its environment configuration.
 - The queue is strictly sequential: there is one uplink, and parallelism would
   only make progress reporting lie.
+- The status message says what is moving and how much: `Downloading video… 47%
+  of 82 MB`, then the audio stream, then `Uploading to Telegram… (82 MB)`. A
+  size-limit refusal quotes how far the download got.
 - Strangers get silence: the bot does not even confirm that it exists.
 
 ## Stack
@@ -114,7 +117,7 @@ is only ever exercised by a person. With a test token:
 4. Text with no links at all → "No tweet link found".
 5. Six links at once → the sixth is refused with "Queue is full".
 6. `MAX_TG_VIDEO_MB=1` with Overflow delivery off → an explicit size-limit
-   verdict and no complete oversized download.
+   verdict naming how far the download got, and no complete oversized download.
 7. Enable the Share Adapter → the file lands there and the chat gets the path
    plus the tweet's text and footer; enable Yandex Disk → the chat gets a
    working public link.

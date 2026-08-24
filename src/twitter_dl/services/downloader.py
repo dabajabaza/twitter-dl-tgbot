@@ -21,7 +21,7 @@ from typing import Any
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError, ExtractorError
 
-from twitter_dl.domain import Clip, ProgressCallback
+from twitter_dl.domain import Clip, DownloadProgress, ProgressCallback
 from twitter_dl.errors import (
     AuthExpired,
     DownloadFailed,
@@ -183,9 +183,9 @@ class YtDlpDownloader:
                     raise _Abandoned
             if on_progress is None:
                 return
-            text = _format_progress(status)
-            if text is not None:
-                loop.call_soon_threadsafe(on_progress, text)
+            progress = _format_progress(status)
+            if progress is not None:
+                loop.call_soon_threadsafe(on_progress, progress)
 
         try:
             info = await asyncio.to_thread(
@@ -330,14 +330,43 @@ def ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
 
 
-def _format_progress(status: dict[str, Any]) -> str | None:
+def _format_progress(status: dict[str, Any]) -> DownloadProgress | None:
     if status.get("status") != "downloading":
         return None
     total = status.get("total_bytes") or status.get("total_bytes_estimate")
     done = status.get("downloaded_bytes") or 0
     if not total:
-        return f"{done / 1024 / 1024:.1f} MB"
-    return f"{done * 100 / total:.0f}%"
+        text = f"{done / 1024 / 1024:.1f} MB"
+    else:
+        text = f"{done * 100 / total:.0f}% of {_human_size(total)}"
+    return DownloadProgress(text=text, stream=_stream_kind(status))
+
+
+def _stream_kind(status: dict[str, Any]) -> str:
+    """Which half of a two-file download this is, if it is one.
+
+    With the ``bv*+ba`` selector the video and audio streams download as two
+    files and the hook reports each separately; the single-file ``/b``
+    fallback (X GIFs, no ffmpeg) carries both codecs and gets no name.
+    """
+    info = status.get("info_dict") or {}
+    vcodec = info.get("vcodec")
+    acodec = info.get("acodec")
+    has_video = bool(vcodec) and vcodec != "none"
+    has_audio = bool(acodec) and acodec != "none"
+    if has_video and not has_audio:
+        return "video"
+    if has_audio and not has_video:
+        return "audio"
+    return ""
+
+
+def _human_size(size_bytes: float) -> str:
+    """Mirror of bot/texts.human_size: a service cannot import the bot layer."""
+    megabytes = size_bytes / 1024 / 1024
+    if megabytes >= 1024:
+        return f"{megabytes / 1024:.1f} GB"
+    return f"{megabytes:.0f} MB"
 
 
 def _clips_from_info(info: Any, url: str) -> list[Clip]:

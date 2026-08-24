@@ -67,24 +67,72 @@ def test_the_cookie_boilerplate_alone_never_means_our_session_died() -> None:
 
 
 class TestProgress:
-    def test_a_known_total_is_reported_as_a_percentage(self) -> None:
-        status = {"status": "downloading", "downloaded_bytes": 47, "total_bytes": 100}
-        assert module._format_progress(status) == "47%"
+    def test_a_known_total_is_reported_as_a_percentage_of_a_human_size(self) -> None:
+        status = {
+            "status": "downloading",
+            "downloaded_bytes": 41 * 1024 * 1024,
+            "total_bytes": 82 * 1024 * 1024,
+        }
+        progress = module._format_progress(status)
+        assert progress is not None
+        assert progress.text == "50% of 82 MB"
 
     def test_an_unknown_total_falls_back_to_megabytes_done(self) -> None:
         status = {"status": "downloading", "downloaded_bytes": 3 * 1024 * 1024}
-        assert module._format_progress(status) == "3.0 MB"
+        progress = module._format_progress(status)
+        assert progress is not None
+        assert progress.text == "3.0 MB"
 
     def test_an_estimate_counts_as_a_total(self) -> None:
         status = {
             "status": "downloading",
-            "downloaded_bytes": 50,
-            "total_bytes_estimate": 200,
+            "downloaded_bytes": 1024 * 1024,
+            "total_bytes_estimate": 4 * 1024 * 1024,
         }
-        assert module._format_progress(status) == "25%"
+        progress = module._format_progress(status)
+        assert progress is not None
+        assert progress.text == "25% of 4 MB"
 
     def test_nothing_is_reported_for_states_that_are_not_progress(self) -> None:
         assert module._format_progress({"status": "finished"}) is None
+
+    def test_a_video_only_stream_is_named_video(self) -> None:
+        status = {
+            "status": "downloading",
+            "downloaded_bytes": 1,
+            "info_dict": {"vcodec": "avc1", "acodec": "none"},
+        }
+        progress = module._format_progress(status)
+        assert progress is not None
+        assert progress.stream == "video"
+
+    def test_an_audio_only_stream_is_named_audio(self) -> None:
+        status = {
+            "status": "downloading",
+            "downloaded_bytes": 1,
+            "info_dict": {"vcodec": "none", "acodec": "mp4a"},
+        }
+        progress = module._format_progress(status)
+        assert progress is not None
+        assert progress.stream == "audio"
+
+    def test_a_single_combined_file_gets_no_stream_name(self) -> None:
+        # The /b fallback (X GIFs, no ffmpeg) downloads one file with both
+        # codecs; naming it "video" would promise an audio run that never comes.
+        status = {
+            "status": "downloading",
+            "downloaded_bytes": 1,
+            "info_dict": {"vcodec": "avc1", "acodec": "mp4a"},
+        }
+        progress = module._format_progress(status)
+        assert progress is not None
+        assert progress.stream == ""
+
+    def test_unknown_codecs_get_no_stream_name(self) -> None:
+        status = {"status": "downloading", "downloaded_bytes": 1}
+        progress = module._format_progress(status)
+        assert progress is not None
+        assert progress.stream == ""
 
 
 class TestDownloadCeiling:

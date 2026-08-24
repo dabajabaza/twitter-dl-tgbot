@@ -183,7 +183,11 @@ When no working Adapter is selected, yt-dlp is stopped as soon as an exact
 announced size or received-byte counter crosses the Chat ceiling. X commonly
 uses HLS, whose final merged size is not reliably known in advance; therefore a
 final file-size check remains authoritative. A multi-Clip Request is atomic on
-this early-refusal path: the first overflow ends the whole Request.
+this early-refusal path: the first overflow ends the whole Request. Both
+refusals speak the same verdict text, so the verdict quotes how the size was
+learned — "stopped at 63 MB" for an aborted download, "the clip is 63 MB" for
+one that finished and only then failed the ceiling — and the abort leaves an
+INFO line in the log, which the shared text alone cannot.
 
 **Consequences.** The common external file name
 (`<date>-<author>-<id>.mp4`) is sortable and greppable. X controls its metadata,
@@ -203,7 +207,11 @@ downloads would not finish sooner: they would share the same pipe.
 
 **Decision.** A single queue consumer. Per request, `asyncio.timeout(1800)`
 covering both the download and the delivery. Progress appears in one editable
-message, edited no more than once every five seconds.
+message, edited no more than once every five seconds, and names what is moving:
+X clips usually arrive as separate video and audio files (`bv*+ba`), each
+honestly running 0→100% on its own, so the message says which stream this is
+and how large it is — otherwise the second run reads as a mysterious restart.
+The upload status names the clip's size for the same reason.
 
 **Consequences.** Waiting time is predictable and can be stated ("2nd in line").
 Throttling is mandatory: yt-dlp calls the progress hook dozens of times a

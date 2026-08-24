@@ -11,7 +11,6 @@ import html
 import logging
 import shutil
 import tempfile
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -23,7 +22,7 @@ from twitter_dl.bot import texts
 from twitter_dl.bot.captions import build_caption
 from twitter_dl.bot.progress import ProgressReporter
 from twitter_dl.config import Settings
-from twitter_dl.domain import Clip, ProgressCallback
+from twitter_dl.domain import Clip, DownloadProgress, ProgressCallback
 from twitter_dl.errors import (
     AuthExpired,
     DownloadFailed,
@@ -286,12 +285,23 @@ class RequestWorker:
             logger.warning("X rejected the stored cookies: %s", exc)
             await self._alerts.auth_expired(str(exc))
             await _say(request, texts.AUTH_EXPIRED)
-        except DownloadTooLarge:
+        except DownloadTooLarge as exc:
+            # Without this line an early abort is invisible in the log: the
+            # verdict text is shared with the final-size refusal below.
+            logger.info(
+                "request for %s stopped early at %s bytes (limit %s)",
+                request.url,
+                exc.observed_bytes,
+                exc.limit_bytes,
+            )
             await _say(
                 request,
                 texts.overflow_unavailable(
                     request.overflow,
                     max_mb=self._settings.max_tg_video_mb,
+                    observed=texts.OVERFLOW_STOPPED_AT.format(
+                        size=texts.human_size(exc.observed_bytes)
+                    ),
                 ),
             )
         except OverflowUnavailable as exc:
@@ -301,6 +311,11 @@ class RequestWorker:
                 texts.overflow_unavailable(
                     request.overflow,
                     max_mb=self._settings.max_tg_video_mb,
+                    observed=(
+                        texts.OVERFLOW_CLIP_SIZE.format(size=texts.human_size(exc.oversized_bytes))
+                        if exc.oversized_bytes
+                        else ""
+                    ),
                 ),
             )
         except OverflowFailed as exc:
@@ -332,12 +347,15 @@ class RequestWorker:
         self, request: Request, url: str, clips: list[Clip]
     ) -> list[OverflowDelivery]:
         """Send every clip where it belongs; return external delivery receipts."""
-        if not request.overflow.ready and any(
-            clip.path.stat().st_size > self._settings.max_tg_video_bytes for clip in clips
-        ):
+        oversized = max(
+            (clip.path.stat().st_size for clip in clips),
+            default=0,
+        )
+        if not request.overflow.ready and oversized > self._settings.max_tg_video_bytes:
             raise OverflowUnavailable(
                 adapter_id=request.overflow.adapter_id,
                 state=request.overflow.state.value,
+                oversized_bytes=oversized,
             )
         total = len(clips)
         overflows: list[OverflowDelivery] = []
@@ -410,16 +428,18 @@ def _delivery_status(
     index: int,
     total: int,
 ) -> str:
-    if clip.path.stat().st_size > settings.max_tg_video_bytes:
+    size_bytes = clip.path.stat().st_size
+    if size_bytes > settings.max_tg_video_bytes:
         return texts.DELIVERING_OVERFLOW.format(adapter=overflow.label)
+    size = texts.human_size(size_bytes)
     if total > 1:
-        return texts.UPLOADING_MANY.format(index=index, total=total)
-    return texts.UPLOADING
+        return texts.UPLOADING_MANY.format(index=index, total=total, size=size)
+    return texts.UPLOADING.format(size=size)
 
 
-def _progress_into(reporter: ProgressReporter) -> Callable[[str], None]:
-    def report(progress: str) -> None:
-        reporter.offer(texts.DOWNLOADING_PROGRESS.format(progress=progress))
+def _progress_into(reporter: ProgressReporter) -> ProgressCallback:
+    def report(progress: DownloadProgress) -> None:
+        reporter.offer(texts.downloading_progress(progress.stream, progress.text))
 
     return report
 
