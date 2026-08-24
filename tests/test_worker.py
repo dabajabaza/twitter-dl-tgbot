@@ -10,15 +10,13 @@ import pytest
 from aiogram.exceptions import ClientDecodeError, TelegramNetworkError
 from aiogram.methods import DeleteMessage, EditMessageText, SendMessage
 
-from tests.helpers.bot_harness import BotHarness
-from tests.helpers.factories import OWNER_ID, build_settings, make_clip
-from twitter_dl.bot import texts
-from twitter_dl.bot.captions import build_caption
-from twitter_dl.bot.progress import ProgressReporter
-from twitter_dl.config import Settings
-from twitter_dl.domain import Clip, DownloadProgress, ProgressCallback
-from twitter_dl.errors import AuthExpired, DownloadTooLarge, NoVideoInTweet, TweetUnavailable
-from twitter_dl.runtime.worker import (
+from clipivore.bot import texts
+from clipivore.bot.captions import build_caption
+from clipivore.bot.progress import ProgressReporter
+from clipivore.config import Settings
+from clipivore.domain import Clip, DownloadProgress, ProgressCallback
+from clipivore.errors import AuthExpired, DownloadTooLarge, NoVideoInTweet, TweetUnavailable
+from clipivore.runtime.worker import (
     OwnerAlerts,
     Request,
     RequestQueue,
@@ -26,9 +24,11 @@ from twitter_dl.runtime.worker import (
     SourceMessage,
     _progress_into,
 )
-from twitter_dl.services.cookies import CookieSession
-from twitter_dl.services.delivery import ChatDelivery, DeliveryResult, OverflowDelivery
-from twitter_dl.services.overflow import OverflowChoice, OverflowDestination, OverflowState
+from clipivore.services.cookies import CookieSession
+from clipivore.services.delivery import ChatDelivery, DeliveryResult, OverflowDelivery
+from clipivore.services.overflow import OverflowChoice, OverflowDestination, OverflowState
+from tests.helpers.bot_harness import BotHarness
+from tests.helpers.factories import OWNER_ID, build_settings, make_clip
 
 TWEET = "https://x.com/someone/status/1234567890"
 

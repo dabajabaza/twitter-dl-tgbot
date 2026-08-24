@@ -13,8 +13,8 @@ from aiogram.methods.get_me import GetMe
 from aiogram.types import CallbackQuery, Chat, Message, Update
 from aiogram.types import User as TgUser
 
-from twitter_dl.runtime.worker import RequestQueue
-from twitter_dl.services.overflow import OverflowCatalog
+from clipivore.runtime.worker import RequestQueue
+from clipivore.services.overflow import OverflowCatalog
 
 M = TypeVar("M", bound=TelegramMethod[Any])
 

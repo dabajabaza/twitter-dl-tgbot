@@ -7,14 +7,14 @@ Checked by parsing imports rather than grepping text: a docstring explaining
 import ast
 from pathlib import Path
 
-import twitter_dl
+import clipivore
+from clipivore.__main__ import build_dispatcher
+from clipivore.bot.handlers import fallback, links, overflow, start
+from clipivore.runtime.worker import RequestQueue
+from clipivore.services.overflow import OverflowCatalog
 from tests.helpers.factories import build_settings
-from twitter_dl.__main__ import build_dispatcher
-from twitter_dl.bot.handlers import fallback, links, overflow, start
-from twitter_dl.runtime.worker import RequestQueue
-from twitter_dl.services.overflow import OverflowCatalog
 
-SRC = Path(twitter_dl.__file__).parent
+SRC = Path(clipivore.__file__).parent
 
 
 def _modules() -> dict[str, ast.Module]:

@@ -8,23 +8,23 @@ waking the owner for.
 """
 
 
-class TwitterDlError(Exception):
+class ClipivoreError(Exception):
     """Anything this bot knows how to explain to a human."""
 
 
-class NotATweetLink(TwitterDlError):
+class NotATweetLink(ClipivoreError):
     """A t.co shortlink that turned out to point somewhere other than a tweet."""
 
 
-class NoVideoInTweet(TwitterDlError):
+class NoVideoInTweet(ClipivoreError):
     """The tweet exists and is readable, it just has no video in it."""
 
 
-class TweetUnavailable(TwitterDlError):
+class TweetUnavailable(ClipivoreError):
     """Deleted, suspended, protected, or otherwise not there for us."""
 
 
-class AuthExpired(TwitterDlError):
+class AuthExpired(ClipivoreError):
     """The cookie session no longer authenticates.
 
     The one failure the owner must act on: everything keeps "working" for public
@@ -32,15 +32,15 @@ class AuthExpired(TwitterDlError):
     """
 
 
-class NetworkUnavailable(TwitterDlError):
+class NetworkUnavailable(ClipivoreError):
     """The proxy or the network is down — nothing to fix in the bot itself."""
 
 
-class DownloadFailed(TwitterDlError):
+class DownloadFailed(ClipivoreError):
     """yt-dlp failed in a way this taxonomy does not recognise."""
 
 
-class DownloadTooLarge(TwitterDlError):
+class DownloadTooLarge(ClipivoreError):
     """A download crossed the Chat ceiling while no Overflow Adapter was usable."""
 
     def __init__(self, *, limit_bytes: int, observed_bytes: int) -> None:
@@ -49,7 +49,7 @@ class DownloadTooLarge(TwitterDlError):
         self.observed_bytes = observed_bytes
 
 
-class OverflowUnavailable(TwitterDlError):
+class OverflowUnavailable(ClipivoreError):
     """The selected Overflow Adapter is off, missing, or misconfigured.
 
     ``oversized_bytes`` carries the size of the clip that needed the Adapter,
@@ -63,7 +63,7 @@ class OverflowUnavailable(TwitterDlError):
         self.oversized_bytes = oversized_bytes
 
 
-class OverflowFailed(TwitterDlError):
+class OverflowFailed(ClipivoreError):
     """A configured Overflow Adapter failed one delivery."""
 
     def __init__(self, *, adapter_id: str, detail: str) -> None:

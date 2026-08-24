@@ -10,7 +10,7 @@ parts only. The footer is appended after fitting and is never truncated.
 
 import html
 
-from twitter_dl.bot import texts
+from clipivore.bot import texts
 
 # Bot API ceiling for a media caption, which aiogram does not enforce itself.
 CAPTION_LIMIT = 1024

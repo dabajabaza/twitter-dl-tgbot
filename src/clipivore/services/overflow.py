@@ -16,10 +16,12 @@ from typing import ClassVar
 
 logger = logging.getLogger(__name__)
 
-ADAPTERS_PACKAGE = "twitter_dl.adapters"
+ADAPTERS_PACKAGE = "clipivore.adapters"
 _ADAPTER_ID = re.compile(r"[a-z][a-z0-9_-]{0,47}")
 _OFF_ID = "none"
 SAVED_SELECTION_ID = "!saved-selection"
+# Written to disk, so it outlives any rename: a marker left by an interrupted
+# write on a running deployment must still read back as one after an upgrade.
 _RECOVERY_MARKER = "twitter-dl overflow selection recovery v1\n"
 
 

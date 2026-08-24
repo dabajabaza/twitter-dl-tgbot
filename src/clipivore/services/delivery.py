@@ -8,9 +8,9 @@ from aiogram import Bot
 from aiogram.enums import ParseMode
 from aiogram.types import FSInputFile
 
-from twitter_dl.domain import Clip
-from twitter_dl.errors import OverflowFailed, OverflowUnavailable
-from twitter_dl.services.overflow import OverflowChoice
+from clipivore.domain import Clip
+from clipivore.errors import OverflowFailed, OverflowUnavailable
+from clipivore.services.overflow import OverflowChoice
 
 logger = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ import pytest
 from yt_dlp.extractor.common import InfoExtractor
 from yt_dlp.utils import DownloadError
 
-from twitter_dl.errors import (
+from clipivore.errors import (
     AuthExpired,
     DownloadFailed,
     DownloadTooLarge,
@@ -16,7 +16,7 @@ from twitter_dl.errors import (
     NoVideoInTweet,
     TweetUnavailable,
 )
-from twitter_dl.services import downloader as module
+from clipivore.services import downloader as module
 
 LOGIN_HINT = InfoExtractor._login_hint(InfoExtractor)
 
@@ -467,7 +467,7 @@ class TestStayingOnX:
 
 class TestCookiesAreACopy:
     def test_the_working_copy_is_what_yt_dlp_is_pointed_at(self, tmp_path: Path) -> None:
-        from twitter_dl.services.cookies import CookieSession
+        from clipivore.services.cookies import CookieSession
 
         export = tmp_path / "cookies.txt"
         export.write_text("netscape")

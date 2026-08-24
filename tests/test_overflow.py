@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from twitter_dl.services import overflow as module
-from twitter_dl.services.overflow import OverflowCatalog, OverflowChoice, OverflowState
+from clipivore.services import overflow as module
+from clipivore.services.overflow import OverflowCatalog, OverflowChoice, OverflowState
 
 FAKES = "tests.helpers.fake_adapters"
 EMPTY = "tests.helpers.no_adapters"

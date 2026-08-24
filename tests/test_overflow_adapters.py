@@ -7,9 +7,9 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from twitter_dl.adapters import _rclone
-from twitter_dl.adapters.share import ShareDestination, ShareSettings
-from twitter_dl.adapters.yandex_disk import YandexDiskDestination, YandexDiskSettings
+from clipivore.adapters import _rclone
+from clipivore.adapters.share import ShareDestination, ShareSettings
+from clipivore.adapters.yandex_disk import YandexDiskDestination, YandexDiskSettings
 
 
 class FakeProcess:
@@ -56,8 +56,8 @@ def share_settings(tmp_path: Path) -> ShareSettings:
     return ShareSettings(
         rclone_binary="/bin/true",
         rclone_config=config,
-        rclone_remote="share:twitter-dl",
-        path_prefix=r"\\router\twitter-dl",
+        rclone_remote="share:clipivore",
+        path_prefix=r"\\router\clipivore",
         _env_file=None,
     )
 
@@ -68,7 +68,7 @@ def yandex_settings(tmp_path: Path) -> YandexDiskSettings:
     return YandexDiskSettings(
         rclone_binary="/bin/true",
         rclone_config=config,
-        rclone_remote="yandex:twitter-dl",
+        rclone_remote="yandex:clipivore",
         _env_file=None,
     )
 
@@ -102,10 +102,10 @@ async def test_share_returns_the_configured_human_path(
 
     location = await ShareDestination(share_settings(tmp_path)).store(source, name="named.mp4")
 
-    assert location == r"\\router\twitter-dl\named.mp4"
+    assert location == r"\\router\clipivore\named.mp4"
     assert "copyto" in calls[0]
     assert "--inplace" in calls[0]
-    assert calls[0][-1] == "share:twitter-dl/named.mp4"
+    assert calls[0][-1] == "share:clipivore/named.mp4"
 
 
 async def test_yandex_uploads_then_returns_a_public_link(
@@ -122,7 +122,7 @@ async def test_yandex_uploads_then_returns_a_public_link(
     assert location == "https://disk.yandex.example/public"
     assert "copyto" in calls[0]
     assert "link" in calls[1]
-    assert calls[0][-1] == calls[1][-1] == "yandex:twitter-dl/named.mp4"
+    assert calls[0][-1] == calls[1][-1] == "yandex:clipivore/named.mp4"
 
 
 async def test_a_cancelled_rclone_process_is_killed(

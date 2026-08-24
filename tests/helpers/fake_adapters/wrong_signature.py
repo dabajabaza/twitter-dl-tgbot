@@ -1,6 +1,6 @@
 """A store that cannot take (source, *, name) is rejected at discovery."""
 
-from twitter_dl.services.overflow import OverflowDestination
+from clipivore.services.overflow import OverflowDestination
 
 
 class WrongSignatureDestination(OverflowDestination):

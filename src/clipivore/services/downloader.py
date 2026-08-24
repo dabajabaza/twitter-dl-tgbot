@@ -21,8 +21,8 @@ from typing import Any
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError, ExtractorError
 
-from twitter_dl.domain import Clip, DownloadProgress, ProgressCallback
-from twitter_dl.errors import (
+from clipivore.domain import Clip, DownloadProgress, ProgressCallback
+from clipivore.errors import (
     AuthExpired,
     DownloadFailed,
     DownloadTooLarge,
@@ -30,7 +30,7 @@ from twitter_dl.errors import (
     NoVideoInTweet,
     TweetUnavailable,
 )
-from twitter_dl.services.cookies import CookieSession
+from clipivore.services.cookies import CookieSession
 
 logger = logging.getLogger(__name__)
 

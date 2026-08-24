@@ -12,7 +12,7 @@ from urllib.parse import urljoin, urlsplit
 
 import aiohttp
 
-from twitter_dl.errors import NetworkUnavailable, NotATweetLink
+from clipivore.errors import NetworkUnavailable, NotATweetLink
 
 logger = logging.getLogger(__name__)
 
