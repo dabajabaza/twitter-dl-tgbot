@@ -319,7 +319,10 @@ def _stray_directories(paths: Iterable[str], *, seen: set[str]) -> list[str]:
     stray: list[str] = []
     for path in paths:
         for entry in Path(path).iterdir():
-            if not entry.is_dir() or entry.name.startswith("_") or entry.name in seen:
+            # Leading dot as well as underscore: a tool's cache directory left
+            # in the package is nobody's half-written Provider, and announcing
+            # `.mypy_cache` as broken would be noise pointing at nothing.
+            if not entry.is_dir() or entry.name[0] in "._" or entry.name in seen:
                 continue
             stray.append(entry.name)
     return sorted(stray)
