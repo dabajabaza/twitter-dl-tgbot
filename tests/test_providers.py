@@ -8,6 +8,7 @@ import re
 
 import pytest
 
+from clipivore.__main__ import _require_providers
 from clipivore.services.providers import (
     Provider,
     ProviderCatalog,
@@ -33,7 +34,11 @@ class TestWhatCountsAsAProvider:
 
     def test_the_file_name_is_the_stable_id(self) -> None:
         # The class may be renamed freely; the id a log line quotes may not.
-        assert [choice.provider_id for choice in catalog().choices if choice.ready] == ["good"]
+        # GoodProvider lives in good.py, so its id is "good" and not "Good".
+        good = catalog().get("good")
+        assert good is not None
+        assert good.cls is GoodProvider
+        assert catalog().get("GoodProvider") is None
 
     def test_underscore_modules_are_helpers_not_providers(self) -> None:
         assert catalog().get("_helper") is None
@@ -84,7 +89,13 @@ class TestBrokenProvidersAreVisibleNotFatal:
         assert choice.provider is None
 
     def test_one_broken_provider_does_not_hide_the_working_ones(self) -> None:
-        assert [choice.name for choice in catalog().ready] == ["Good"]
+        built = catalog()
+        broken = {choice.provider_id for choice in built.choices if not choice.ready}
+        ready = {choice.provider_id for choice in built.ready}
+        # Nine ways to be broken sit in this package alongside the working ones,
+        # and neither set leaks into the other.
+        assert "good" in ready
+        assert broken and not (broken & ready)
 
     def test_a_provider_that_built_badly_still_claims_its_links(self) -> None:
         # The whole point of declaring patterns on the class: the person gets
@@ -105,6 +116,82 @@ class TestBrokenProvidersAreVisibleNotFatal:
         blank = catalog().get("blank_name")
         assert blank is not None
         assert blank.cls is None
+
+
+class TestABotWithNoProvidersRefusesToRun:
+    """Degrading is for "some of them broke", not for "all of them did"."""
+
+    def test_an_empty_catalog_is_fatal_rather_than_quietly_healthy(self) -> None:
+        # Without this the process reports READY=1, the watchdog stays green and
+        # the deploy health check passes, while every link gets a refusal. D16
+        # refuses that shape for the worker; it is no better here.
+        with pytest.raises(SystemExit):
+            _require_providers(catalog("tests.helpers.no_providers"))
+
+    def test_one_working_provider_among_broken_ones_is_enough_to_run(self) -> None:
+        _require_providers(catalog())
+
+
+class TestAProviderKeepsItsOwnRegexSemantics:
+    """The catalog must never reinterpret a Provider's pattern.
+
+    An earlier version spliced every pattern's *text* into one alternation. That
+    threw away the flags each pattern was compiled with and renumbered its
+    groups, so ordinary regexes either matched nothing or refused to compile —
+    and a refusal to compile happened inside the catalog's constructor, taking
+    the whole bot down. These are the shapes that broke it.
+    """
+
+    @pytest.mark.parametrize(
+        ("url", "provider_id"),
+        [
+            ("https://verbose.example/12", "verbose_pattern"),
+            ("https://inline.example/34", "inline_flag"),
+            ("https://backref.example/7-7", "backreference"),
+            ("https://case.example/abc", "case_sensitive"),
+        ],
+    )
+    def test_patterns_that_once_broke_the_catalog_now_match_normally(
+        self, url: str, provider_id: str
+    ) -> None:
+        links = catalog().extract(f"look {url} here")
+        assert [(link.url, link.choice.provider_id) for link in links] == [(url, provider_id)]
+
+    def test_every_one_of_them_is_ready_rather_than_fatal(self) -> None:
+        # The failure this replaced was not a wrong answer, it was no bot at all.
+        for provider_id in ("verbose_pattern", "inline_flag", "backreference", "case_sensitive"):
+            choice = catalog().get(provider_id)
+            assert choice is not None
+            assert choice.state is ProviderState.READY
+
+    def test_a_case_sensitive_provider_is_not_widened_on_its_behalf(self) -> None:
+        # It compiled without IGNORECASE deliberately; nothing may add it.
+        assert catalog().extract("https://case.example/ABC") == []
+        assert catalog().claim("https://case.example/ABC") is None
+
+    def test_a_backreference_still_has_to_hold(self) -> None:
+        assert catalog().extract("https://backref.example/7-8") == []
+
+
+class TestOverlappingProvidersResolveByLongestMatch:
+    URL = "https://good.example/123/extra"
+
+    def test_the_provider_that_spells_out_more_of_the_url_wins(self) -> None:
+        # Alphabetical order would hand this to `good` and silently truncate the
+        # link to https://good.example/123 — a request for the wrong post.
+        links = catalog().extract(self.URL)
+        assert [(link.url, link.choice.provider_id) for link in links] == [
+            (self.URL, "overlapping")
+        ]
+
+    def test_claim_and_extract_never_disagree_about_who_owns_a_link(self) -> None:
+        claimed = catalog().claim(self.URL)
+        assert claimed is not None
+        assert claimed.provider_id == catalog().extract(self.URL)[0].choice.provider_id
+
+    def test_the_narrower_provider_still_gets_the_urls_that_are_only_its(self) -> None:
+        links = catalog().extract("https://good.example/123")
+        assert [link.choice.provider_id for link in links] == ["good"]
 
 
 class TestFindingLinksAcrossProviders:

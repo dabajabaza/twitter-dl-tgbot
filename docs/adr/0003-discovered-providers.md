@@ -40,10 +40,36 @@ heard of. A module that failed to *import* has no readable patterns and cannot
 do this — its links do fall through, and the startup log is the only place that
 breakage shows.
 
+**Every Provider's patterns stay its own.** The catalog runs each compiled
+`post_link` / `short_link` over the message and merges the matches by position;
+it never splices their source text into one combined expression. Splicing was
+tried first and looked cheaper — one pass over the message instead of one per
+Provider — but the text of a pattern carries neither its flags nor its group
+numbering. A `re.VERBOSE` Provider matched nothing at all while still reporting
+itself ready, and a pattern holding a backreference or a leading `(?i)` failed
+to compile *inside the catalog's constructor*, which stopped the whole bot —
+the exact outcome this discovery scheme exists to prevent. The cost of the
+honest version is one regex pass per Provider, which at this scale is nothing.
+
+Where two Providers both recognise a link, the one matching **more** of it wins,
+and a genuine tie goes to the earlier module name. Preferring the longer match is
+what stops a broad pattern from truncating a URL that a narrower sibling spells
+out in full — a truncated link is a request for a different post, made silently.
+`claim()` applies the same rule, so it can never disagree with what `extract()`
+hands the queue.
+
 The extractor lock survives the move and gets stricter: it is now per Provider
 (`EngineProfile.allowed_extractors`), never a union across them. A union would
 let a post on one platform redirect into another platform's extractor, which is
 exactly the hole the lock exists to close (ARCHITECTURE.md D15, D18).
+
+**One broken Provider degrades the bot; all of them broken stops it.** Naming a
+platform that cannot serve is the whole point, and the others keep working. But a
+process where *nothing* is ready answers every link with a refusal while systemd,
+the watchdog and the deploy health check all report success — the shape D16
+refuses for the worker, for the same reason: a live bot that does nothing never
+reaches the person who could fix it. So an empty ready-list is fatal before
+`READY=1`.
 
 The shared yt-dlp engine stays one file (D12). A Provider hands it an
 `EngineProfile` — extractors, error markers, description cleaner, profile-URL

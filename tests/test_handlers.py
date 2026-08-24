@@ -50,7 +50,7 @@ async def test_a_request_keeps_the_adapter_selected_when_the_link_was_accepted(
     harness.dp["overflow_catalog"] = catalog
 
     await harness.send(TWEET, user_id=OWNER_ID)
-    request = await harness.queue.take()
+    request = await harness.take()
 
     assert request.overflow.adapter_id == "test"
     harness.queue.release()
@@ -66,9 +66,9 @@ async def test_every_link_in_one_message_gets_its_own_request(harness: BotHarnes
 async def test_links_from_one_message_share_one_source_message(harness: BotHarness) -> None:
     await harness.send(f"{TWEET} and also {OTHER_TWEET}", user_id=OWNER_ID)
 
-    first = await harness.queue.take()
+    first = await harness.take()
     harness.queue.release()
-    second = await harness.queue.take()
+    second = await harness.take()
     harness.queue.release()
 
     # The worker refcounts terminal outcomes on this shared object, so the
@@ -111,7 +111,7 @@ async def test_a_refused_link_keeps_the_message_even_if_the_accepted_ones_succee
     await harness.send(links, user_id=OWNER_ID)
 
     for _ in range(limit):
-        request = await harness.queue.take()
+        request = await harness.take()
         assert request.source is not None
         await request.source.resolve(succeeded=True)
         harness.queue.release()
@@ -149,7 +149,10 @@ async def test_a_link_claimed_by_a_broken_provider_is_refused_by_name(
     await harness.send("https://broken.example/1", user_id=OWNER_ID)
 
     assert harness.queue.load == 0
-    assert any("Broken" in text for text in edited_texts(harness))
+    # Said once, not posted as "Queued…" and edited a moment later: the verdict
+    # is known before anything is awaited.
+    assert [text for text in harness.session.sent_texts() if "Broken" in text]
+    assert not edited_texts(harness)
     # The user's message survives, so the link can be retried after a fix.
     assert not harness.session.calls_of(DeleteMessage)
 
@@ -172,3 +175,34 @@ def edited_texts(harness: BotHarness) -> list[str]:
         for method in harness.session.calls_of(EditMessageText)
         if (text := getattr(method, "text", None))
     ]
+
+
+async def test_a_link_hidden_behind_formatted_text_is_still_found(
+    harness: BotHarness,
+) -> None:
+    # A link sent as formatted text lives in the message entities, not in the
+    # text — the only trace in the text is the label somebody clicked on.
+    await harness.send(
+        "look at this one",
+        user_id=OWNER_ID,
+        hidden_links={"this one": TWEET},
+    )
+
+    assert harness.queue.load == 1
+    request = await harness.take()
+    assert request.url == TWEET
+
+
+async def test_a_visible_and_a_hidden_link_are_both_queued(harness: BotHarness) -> None:
+    # Both are read, but note the order: hidden links are appended after the
+    # visible ones rather than interleaved by where they sit in the text.
+    await harness.send(
+        f"{TWEET} and also this one",
+        user_id=OWNER_ID,
+        hidden_links={"this one": OTHER_TWEET},
+    )
+
+    assert harness.queue.load == 2
+    first = await harness.take()
+    second = await harness.take()
+    assert [first.url, second.url] == [TWEET, OTHER_TWEET]

@@ -89,9 +89,12 @@ class ExampleProvider(Provider):
         # Read your own EXAMPLE_* settings here; `context` carries the one
         # outbound proxy the whole bot uses.
         self._engine = YtDlpDownloader(
-            # Never a union with another Provider's extractors: that would let a
+            # yt-dlp matches these against the whole extractor name, so the
+            # `.*` is what admits the `example:card`-style siblings; without it
+            # only an extractor named exactly "example" is allowed. Never a
+            # union with another Provider's extractors, though: that would let a
             # post here redirect into someone else's extractor (D15, D18).
-            EngineProfile(allowed_extractors=("example",)),
+            EngineProfile(allowed_extractors=("example.*",)),
             proxy=context.proxy,
         )
 

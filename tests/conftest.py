@@ -24,6 +24,29 @@ from tests.helpers.factories import build_settings
 # with build_dispatcher's list by test_architecture.py.
 _SHARED_ROUTERS = (start.router, overflow.router, links.router, fallback.router)
 
+# Every environment variable a Provider reads for itself. `Settings` is built
+# with `_env_file=None` in the factories, but a Provider constructs its own
+# settings inside the catalog, where a test cannot reach in — so the ambient
+# values have to go before it is built. A new Provider with settings of its own
+# adds them here; forget to, and its tests quietly test the developer's machine.
+_PROVIDER_ENV_VARS = ("COOKIES_FILE",)
+
+
+@pytest.fixture(autouse=True)
+def hermetic_provider_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep the developer's own environment out of every Provider.
+
+    Without this, `COOKIES_FILE=/tmp` in a shell — or a production `.env` copied
+    into the working tree — makes X misconfigured and fails tests that have
+    nothing to do with cookies. Anyone running the suite on the deploy host hits
+    it immediately.
+    """
+    for name in _PROVIDER_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    # pydantic-settings resolves `.env` against the working directory, so moving
+    # out of the repository is what makes a stray one invisible.
+    monkeypatch.chdir(tmp_path)
+
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
