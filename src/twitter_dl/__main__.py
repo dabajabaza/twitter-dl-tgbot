@@ -196,11 +196,7 @@ async def _run_bot(settings: Settings) -> None:
     bot = Bot(token=settings.bot_token, session=session)
 
     queue = RequestQueue(settings.queue_limit)
-    overflow_catalog = OverflowCatalog(
-        settings.overflow_adapters,
-        default=settings.overflow_default,
-        state_file=settings.overflow_state_file,
-    )
+    overflow_catalog = OverflowCatalog(state_file=settings.overflow_state_file)
     cookies = CookieSession(settings.cookies_file)
     worker = RequestWorker(
         queue=queue,

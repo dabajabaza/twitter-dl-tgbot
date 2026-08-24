@@ -25,11 +25,8 @@ async def test_help_states_the_size_limit_that_changes_where_clips_land(
 async def test_help_names_the_current_overflow_destination(
     harness: BotHarness, tmp_path: Path
 ) -> None:
-    catalog = OverflowCatalog(
-        {"test": "tests.helpers.overflow_adapters:create"},
-        default="test",
-        state_file=tmp_path / "selection",
-    )
+    catalog = OverflowCatalog("tests.helpers.fake_adapters", state_file=tmp_path / "selection")
+    catalog.select("test")
     harness.dp["overflow_catalog"] = catalog
 
     await harness.send("/help", user_id=OWNER_ID)
@@ -47,11 +44,8 @@ async def test_a_link_is_queued_and_acknowledged(harness: BotHarness) -> None:
 async def test_a_request_keeps_the_adapter_selected_when_the_link_was_accepted(
     harness: BotHarness, tmp_path: Path
 ) -> None:
-    catalog = OverflowCatalog(
-        {"test": "tests.helpers.overflow_adapters:create"},
-        default="test",
-        state_file=tmp_path / "selection",
-    )
+    catalog = OverflowCatalog("tests.helpers.fake_adapters", state_file=tmp_path / "selection")
+    catalog.select("test")
     harness.dp["overflow_catalog"] = catalog
 
     await harness.send(TWEET, user_id=OWNER_ID)

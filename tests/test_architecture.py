@@ -81,7 +81,7 @@ def test_the_catch_all_router_is_registered_last(tmp_path: Path) -> None:
     # fallback matches any message, so anything registered after it would be
     # dead code — and the failure would be silent.
     settings = build_settings(tmp_path)
-    catalog = OverflowCatalog({}, default="none", state_file=settings.overflow_state_file)
+    catalog = OverflowCatalog("tests.helpers.no_adapters", state_file=settings.overflow_state_file)
     dp = build_dispatcher(settings, RequestQueue(settings.queue_limit), catalog)
     try:
         assert dp.sub_routers[-1] is fallback.router

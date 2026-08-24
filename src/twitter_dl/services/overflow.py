@@ -4,18 +4,19 @@ import importlib
 import inspect
 import logging
 import os
+import pkgutil
 import re
 import stat
 import tempfile
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import ClassVar
 
 logger = logging.getLogger(__name__)
 
+ADAPTERS_PACKAGE = "twitter_dl.adapters"
 _ADAPTER_ID = re.compile(r"[a-z][a-z0-9_-]{0,47}")
 _OFF_ID = "none"
 SAVED_SELECTION_ID = "!saved-selection"
@@ -23,11 +24,17 @@ _RECOVERY_MARKER = "twitter-dl overflow selection recovery v1\n"
 
 
 class OverflowDestination(ABC):
-    """Store one oversized clip and return a locator suitable for the chat."""
+    """Store one oversized clip and return a locator suitable for the chat.
 
-    @property
-    @abstractmethod
-    def label(self) -> str: ...
+    A concrete subclass in a module of the adapters package IS the Adapter:
+    the catalog discovers it by scanning that package, reads ``label`` from
+    the class, and constructs it with no arguments — settings come from the
+    subclass's own prefixed environment variables.
+    """
+
+    # The human-facing name shown in Menu. Read from the class, so even an
+    # Adapter that failed to construct is reported under its own name.
+    label: ClassVar[str]
 
     @abstractmethod
     async def store(self, source: Path, *, name: str) -> str: ...
@@ -42,7 +49,7 @@ class OverflowState(StrEnum):
 
 @dataclass(frozen=True)
 class OverflowChoice:
-    """One configured Menu choice, including a failure to construct it."""
+    """One discovered Menu choice, including a failure to construct it."""
 
     adapter_id: str
     label: str
@@ -58,21 +65,15 @@ _OFF = OverflowChoice(adapter_id=_OFF_ID, label=_OFF_ID, state=OverflowState.OFF
 
 
 class OverflowCatalog:
-    """Loaded Adapter choices and the Owner's persisted selection."""
+    """Discovered Adapter choices and the Owner's persisted selection."""
 
     def __init__(
         self,
-        factories: Mapping[str, object],
+        package: str = ADAPTERS_PACKAGE,
         *,
-        default: str,
         state_file: Path,
     ) -> None:
-        self._choices = {
-            adapter_id: _load(adapter_id, factory_path)
-            for raw_id, factory_path in factories.items()
-            if (adapter_id := raw_id.strip().lower())
-        }
-        self._default = default.strip().lower() or _OFF_ID
+        self._choices = _discover(package)
         self._state_file = state_file
         self._recovery_file = state_file.with_name(f"{state_file.name}.recovery")
         self._selection_error: str | None = None
@@ -138,7 +139,8 @@ class OverflowCatalog:
                 self._selection_error = "saved selection points to a missing file"
                 logger.error("%s: %s", self._state_file, self._selection_error)
                 return SAVED_SELECTION_ID
-            return self._default
+            # No persisted choice yet: Overflow delivery starts off.
+            return _OFF_ID
         except (OSError, UnicodeError) as exc:
             logger.error("could not read overflow selection %s: %s", self._state_file, exc)
             self._selection_error = str(exc)
@@ -273,66 +275,85 @@ class OverflowCatalog:
             return False
 
 
-def _load(adapter_id: str, factory_path: object) -> OverflowChoice:
+def _discover(package: str) -> dict[str, OverflowChoice]:
+    """Every Adapter the adapters package holds, in module-name order.
+
+    A module IS an Adapter: its file name is the stable id and its one
+    concrete ``OverflowDestination`` subclass is the implementation. Modules
+    whose names start with an underscore are shared helpers, not Adapters.
+    """
+    location = importlib.import_module(package)
+    ids = sorted(
+        info.name
+        for info in pkgutil.iter_modules(location.__path__)
+        if not info.name.startswith("_") and not info.ispkg
+    )
+    return {adapter_id: _load(adapter_id, f"{package}.{adapter_id}") for adapter_id in ids}
+
+
+def _load(adapter_id: str, module_name: str) -> OverflowChoice:
     label = _label_from_id(adapter_id)
     if adapter_id == _OFF_ID:
         return _broken(
             adapter_id,
             label,
             OverflowState.MISCONFIGURED,
-            "adapter id 'none' is reserved for disabled Overflow delivery",
+            "adapter module name 'none' is reserved for disabled Overflow delivery",
         )
     if not _ADAPTER_ID.fullmatch(adapter_id):
         return _broken(
             adapter_id,
             label,
             OverflowState.MISCONFIGURED,
-            "adapter id must match [a-z][a-z0-9_-]{0,47}",
-        )
-
-    if not isinstance(factory_path, str):
-        return _broken(
-            adapter_id,
-            label,
-            OverflowState.MISCONFIGURED,
-            "factory path must be a string",
-        )
-    module_name, separator, factory_name = factory_path.strip().partition(":")
-    if not separator or not module_name or not factory_name:
-        return _broken(
-            adapter_id,
-            label,
-            OverflowState.MISCONFIGURED,
-            "factory path must have the form python.module:create",
+            "adapter module name must match [a-z][a-z0-9_-]{0,47}",
         )
 
     try:
         module = importlib.import_module(module_name)
-    except ModuleNotFoundError as exc:
-        state = (
-            OverflowState.MISSING
-            if exc.name == module_name or module_name.startswith(f"{exc.name}.")
-            else OverflowState.MISCONFIGURED
-        )
-        return _broken(adapter_id, label, state, str(exc))
     except (Exception, SystemExit) as exc:
+        # The scanner just saw the file, so a failed import is a broken
+        # Adapter, never a missing one — MISSING is reserved for a persisted
+        # selection whose module has since disappeared.
         return _broken(adapter_id, label, OverflowState.MISCONFIGURED, str(exc))
 
+    classes = [
+        value
+        for value in vars(module).values()
+        if isinstance(value, type)
+        and issubclass(value, OverflowDestination)
+        and value.__module__ == module.__name__
+        and not inspect.isabstract(value)
+    ]
+    if not classes:
+        return _broken(
+            adapter_id,
+            label,
+            OverflowState.MISCONFIGURED,
+            "module defines no concrete OverflowDestination subclass",
+        )
+    if len(classes) > 1:
+        names = ", ".join(sorted(cls.__name__ for cls in classes))
+        return _broken(
+            adapter_id,
+            label,
+            OverflowState.MISCONFIGURED,
+            f"module defines several OverflowDestination subclasses ({names}); expected one",
+        )
+    cls = classes[0]
+
+    class_label = getattr(cls, "label", None)
+    if not isinstance(class_label, str) or not class_label.strip():
+        return _broken(
+            adapter_id,
+            label,
+            OverflowState.MISCONFIGURED,
+            f"{cls.__name__}.label must be a non-empty string class attribute",
+        )
+    # From here on even a broken Adapter is reported under its own name.
+    label = class_label
+
     try:
-        factory = getattr(module, factory_name, None)
-        if not callable(factory):
-            return _broken(
-                adapter_id,
-                label,
-                OverflowState.MISSING,
-                f"{factory_path} is not a callable factory",
-            )
-        destination = cast(Callable[[], object], factory)()
-        if not isinstance(destination, OverflowDestination):
-            raise TypeError("factory did not return an OverflowDestination")
-        destination_label = destination.label
-        if not isinstance(destination_label, str) or not destination_label.strip():
-            raise ValueError("adapter label must not be empty")
+        destination = cls()
         if not inspect.iscoroutinefunction(destination.store):
             raise TypeError("OverflowDestination.store must be async")
         signature = inspect.signature(destination.store)
@@ -345,7 +366,7 @@ def _load(adapter_id: str, factory_path: object) -> OverflowChoice:
 
     return OverflowChoice(
         adapter_id=adapter_id,
-        label=destination_label,
+        label=label,
         state=OverflowState.READY,
         destination=destination,
     )
