@@ -150,9 +150,11 @@ class XProvider(Provider):
         settings = XSettings()
         cookies_file = settings.cookies_file
         if cookies_file is not None and cookies_file.is_dir():
-            # Not a startup failure any more: X goes misconfigured, is named as
-            # such in /help and in the refusal, and every other Provider keeps
-            # working.
+            # yt-dlp would try to read cookies out of a directory on every
+            # download. Raising here makes X misconfigured rather than killing
+            # the bot: it is named in /help and in the refusal, and any other
+            # Provider keeps working. If X is the only one installed, though,
+            # "every Provider is broken" is still fatal at startup — see D18.
             raise ValueError(f"COOKIES_FILE must be a file, got directory {cookies_file}")
         self.cookies = CookieSession(cookies_file)
         self._proxy = context.proxy

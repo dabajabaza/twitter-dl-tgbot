@@ -23,7 +23,6 @@ HELP = (
 )
 HELP_PROVIDER = "• {provider}: {hint}"
 HELP_PROVIDER_BROKEN = "• {provider}: unavailable — the owner needs to check the bot's log."
-HELP_NO_PROVIDERS = "No sources are configured right now — the owner needs to check the bot's log."
 
 HELP_OVERFLOW_READY = "Larger clips are delivered through {adapter}."
 HELP_OVERFLOW_OFF = "Larger clips cannot be delivered while Overflow delivery is off."
@@ -135,7 +134,9 @@ def _provider_lines(providers: ProviderCatalog) -> str:
         )
         for choice in providers.choices
     ]
-    return "\n".join(lines) if lines else HELP_NO_PROVIDERS
+    # No empty case: a bot with no ready Provider exits at startup rather than
+    # reaching a /help, so a string for it would be one nobody can ever read.
+    return "\n".join(lines)
 
 
 def downloading_progress(stream: str, progress: str) -> str:

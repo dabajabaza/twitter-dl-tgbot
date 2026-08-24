@@ -2,7 +2,7 @@
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -15,7 +15,13 @@ from clipivore.bot.captions import build_caption
 from clipivore.bot.progress import ProgressReporter
 from clipivore.config import Settings
 from clipivore.domain import Clip, DownloadProgress, ProgressCallback
-from clipivore.errors import AuthExpired, DownloadTooLarge, NoVideoInPost, PostUnavailable
+from clipivore.errors import (
+    AuthExpired,
+    DownloadTooLarge,
+    NotAPostLink,
+    NoVideoInPost,
+    PostUnavailable,
+)
 from clipivore.runtime.worker import (
     OwnerAlerts,
     Request,
@@ -55,6 +61,9 @@ class FakeDownloader:
         self._delay = delay
         self.destinations: list[Path] = []
         self.max_bytes: list[int | None] = []
+        # What the engine was actually pointed at — which is the *resolved*
+        # link, not necessarily the one the person sent.
+        self.urls: list[str] = []
 
     async def download(
         self,
@@ -64,6 +73,7 @@ class FakeDownloader:
         on_progress: ProgressCallback | None = None,
         max_bytes: int | None = None,
     ) -> list[Clip]:
+        self.urls.append(url)
         self.destinations.append(dest)
         self.max_bytes.append(max_bytes)
         if on_progress is not None:
@@ -787,6 +797,61 @@ async def test_a_request_carrying_a_broken_provider_still_gets_a_named_verdict(
         await drain(harness.queue)
 
     assert texts.PROVIDER_MISCONFIGURED.format(provider="Broken") in edited_texts(harness)
+
+
+class TestTheWorkerGoesThroughTheProviderToResolve:
+    """The seam between the worker and a Provider: the URL it actually downloads.
+
+    A short link is followed by its own Provider, so what reaches the engine is
+    not what the person sent — and the caption has to link the resolved post,
+    not the wrapper.
+    """
+
+    async def test_a_resolved_link_is_what_actually_gets_downloaded(
+        self, harness: BotHarness, settings: Settings
+    ) -> None:
+        downloader = FakeDownloader()
+        provider = make_provider_choice(downloader=downloader, resolve=_always(TWEET))
+        worker = build_worker(harness, settings)
+
+        async with running(worker):
+            harness.queue.submit(
+                make_request(harness, url="https://t.co/AbC123", provider=provider)
+            )
+            await drain(harness.queue)
+
+        assert downloader.urls == [TWEET]
+
+    async def test_a_short_link_leading_nowhere_useful_says_so(
+        self, harness: BotHarness, settings: Settings
+    ) -> None:
+        provider = make_provider_choice(
+            downloader=FakeDownloader(),
+            resolve=_raising(NotAPostLink("leads outside X")),
+        )
+        worker = build_worker(harness, settings)
+
+        async with running(worker):
+            harness.queue.submit(
+                make_request(harness, url="https://t.co/AbC123", provider=provider)
+            )
+            await drain(harness.queue)
+
+        assert texts.NOT_A_POST.format(provider=PROVIDER_NAME) in edited_texts(harness)
+
+
+def _always(target: str) -> Callable[[str], Awaitable[str]]:
+    async def resolve(url: str) -> str:
+        return target
+
+    return resolve
+
+
+def _raising(error: Exception) -> Callable[[str], Awaitable[str]]:
+    async def resolve(url: str) -> str:
+        raise error
+
+    return resolve
 
 
 class TestTheWorkerCannotDieQuietly:

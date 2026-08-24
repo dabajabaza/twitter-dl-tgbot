@@ -1,6 +1,7 @@
 """Building the objects tests need, with the same types production uses."""
 
 import re
+from collections.abc import Awaitable, Callable
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,7 @@ def make_provider_choice(
     name: str = "X",
     cookies: CookieSession | None = None,
     ready: bool = True,
+    resolve: Callable[[str], Awaitable[str]] | None = None,
 ) -> ProviderChoice:
     """A Provider the worker can be driven with, without importing an engine.
 
@@ -86,6 +88,11 @@ def make_provider_choice(
         def downloader(self) -> Downloader:
             assert downloader is not None
             return downloader
+
+        async def resolve(self, url: str) -> str:
+            # A Provider with a short link turns it into the post link here, so
+            # what the engine is handed need not be what the person sent.
+            return await resolve(url) if resolve else url
 
     _TestProvider.name = name
     return ProviderChoice(

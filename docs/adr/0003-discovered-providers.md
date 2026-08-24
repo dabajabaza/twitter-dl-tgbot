@@ -11,9 +11,12 @@ Providers are now discovered the way Overflow Adapters are
 ([ADR 0002](0002-discovered-overflow-adapters.md)): `services/providers.py`
 scans `clipivore/providers/` at startup, and every non-underscore module holding
 exactly one concrete `Provider` subclass is a Provider, its file name the stable
-id. A subdirectory is a visible misconfigured entry rather than a silent skip,
-and a module that fails to import, construct or shape up is retained as
-misconfigured instead of stopping the bot. Adding a platform is adding a file.
+id. A subdirectory is a visible misconfigured entry rather than a silent skip —
+including a bare folder with no `__init__.py`, which the module scanner does not
+report at all and which discovery therefore looks for itself, since a folder
+somebody started a Provider in is the likelier mistake of the two. A module that
+fails to import, construct or shape up is retained as misconfigured instead of
+stopping the bot. Adding a platform is adding a file.
 
 Three things differ from the Adapters, each for a reason:
 
