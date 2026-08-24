@@ -80,7 +80,7 @@ from clipivore.services.providers import Provider, ProviderContext
 
 class ExampleProvider(Provider):
     name: ClassVar[str] = "Example"
-    hint: ClassVar[str] = "example.com/<user>/post/<id>"          # one /help line
+    hint: ClassVar[str] = "example.com/<user>/post/<id>"  # one /help line
     post_link: ClassVar[re.Pattern[str]] = re.compile(
         r"https://example\.com/[^/]+/post/(?P<id>\w+)"
     )
