@@ -2,7 +2,7 @@
 name = "clipivore"
 description = "Personal Telegram bot that downloads videos from X/Twitter posts"
 requires-python = ">=3.12"
-version = "0.5.0"
+version = "0.5.1"
 readme = "README.md"
 license = "MIT"
 authors = [
@@ -55,9 +55,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-# src/twitter_dl is the transition shim the server's rc.d still starts; it goes
-# away together with `python -m twitter_dl` in the automation repo.
-packages = ["src/clipivore", "src/twitter_dl"]
+packages = ["src/clipivore"]
 
 [tool.ruff]
 line-length = 100
