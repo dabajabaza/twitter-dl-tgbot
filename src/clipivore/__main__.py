@@ -37,6 +37,10 @@ logger = logging.getLogger("clipivore")
 
 _LOCK_NAME = "clipivore.lock"
 _ALREADY_RUNNING = "Already running — a second copy would fight over getUpdates."
+_NO_PROVIDERS = (
+    "No Provider can serve a link, so there is nothing this bot could do. "
+    "The reasons are in the provider errors logged above."
+)
 
 # aiogram waits (session timeout + polling timeout) on every getUpdates, so the
 # defaults hide a dead socket for a minute and a half. Tightened to ~35s: still
@@ -200,7 +204,7 @@ async def _run_bot(settings: Settings) -> None:
     queue = RequestQueue(settings.queue_limit)
     overflow_catalog = OverflowCatalog(state_file=settings.overflow_state_file)
     provider_catalog = ProviderCatalog(ProviderContext(proxy=settings.ytdlp_proxy))
-    _log_providers(provider_catalog)
+    _require_providers(provider_catalog)
     worker = RequestWorker(
         queue=queue,
         delivery=ClipDelivery(
@@ -252,14 +256,21 @@ async def _run_bot(settings: Settings) -> None:
         await bot.session.close()
 
 
-def _log_providers(catalog: ProviderCatalog) -> None:
-    """Say what the bot can download from, at the one moment somebody reads the log.
+def _require_providers(catalog: ProviderCatalog) -> None:
+    """Say what the bot can download from, and refuse to run if that is nothing.
 
-    A Provider whose module failed to import cannot claim its own links, so this
-    line is the only place that breakage is visible at all.
+    One broken Provider among several is a degraded bot, which is the whole
+    point of discovery: the others keep working and the broken one is named. All
+    of them broken is a different animal — a process that answers every link
+    with a refusal while systemd, the watchdog and the deploy health check all
+    report success. That is exactly the shape D16 refuses for the worker: a live
+    bot that does nothing is worse than a dead one, because only the dead one
+    reaches the person who can fix it.
     """
     ready = [choice.name for choice in catalog.ready]
-    logger.info("providers ready: %s", ", ".join(ready) if ready else "none")
+    if not ready:
+        raise SystemExit(_NO_PROVIDERS)
+    logger.info("providers ready: %s", ", ".join(ready))
 
 
 def _worker_died(task: asyncio.Task[None]) -> None:

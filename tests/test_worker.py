@@ -624,6 +624,57 @@ class TestOwnerAlerts:
         # The person who asked is told something useful, but not the details.
         assert texts.AUTH_EXPIRED.format(provider=PROVIDER_NAME) in edited_texts(harness)
 
+    async def test_two_providers_are_deduped_apart_from_each_other(
+        self, harness: BotHarness, settings: Settings, tmp_path: Path
+    ) -> None:
+        # One dead session must not silence the alert for a different platform's
+        # dead session — the dedup is per Provider, not per bot.
+        first_export = tmp_path / "x-cookies.txt"
+        first_export.write_text("stale")
+        second_export = tmp_path / "other-cookies.txt"
+        second_export.write_text("also stale")
+        first = make_provider_choice(
+            downloader=FakeDownloader(),
+            provider_id="x",
+            name="X",
+            cookies=CookieSession(first_export),
+        )
+        second = make_provider_choice(
+            downloader=FakeDownloader(),
+            provider_id="other",
+            name="Other",
+            cookies=CookieSession(second_export),
+        )
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id)
+
+        await alerts.auth_expired(first, "NSFW")
+        await alerts.auth_expired(second, "NSFW")
+        await alerts.auth_expired(first, "NSFW")
+        await alerts.auth_expired(second, "NSFW")
+
+        sent = harness.session.calls_of(SendMessage)
+        assert len(sent) == 2
+        assert [("X" in call.text, "Other" in call.text) for call in sent] == [
+            (True, False),
+            (False, True),
+        ]
+
+    async def test_a_provider_with_no_session_still_reaches_the_owner(
+        self, harness: BotHarness, settings: Settings
+    ) -> None:
+        # Bluesky holds no cookies. If that ever produced an AuthExpired, the
+        # alert must still send — naming the env var rather than a file path.
+        provider = make_provider_choice(
+            downloader=FakeDownloader(), provider_id="bluesky", name="Bluesky", cookies=None
+        )
+        alerts = OwnerAlerts(harness.bot, owner_id=settings.owner_id)
+
+        await alerts.auth_expired(provider, "rejected")
+
+        sent = harness.session.calls_of(SendMessage)
+        assert len(sent) == 1
+        assert "COOKIES_FILE" in sent[0].text
+
     async def test_the_owner_is_not_told_twice_about_the_same_dead_session(
         self, harness: BotHarness, settings: Settings, tmp_path: Path
     ) -> None:
@@ -715,6 +766,27 @@ class TestOwnerAlerts:
         await alerts.auth_expired(provider, "NSFW")
 
         assert len(harness.session.calls_of(SendMessage)) == 2
+
+
+async def test_a_request_carrying_a_broken_provider_still_gets_a_named_verdict(
+    harness: BotHarness, settings: Settings
+) -> None:
+    # Unreachable in a running bot — the handler refuses first — which is
+    # exactly why it needs a test: nothing else would notice it rotting.
+    worker = build_worker(harness, settings)
+
+    async with running(worker):
+        harness.queue.submit(
+            make_request(
+                harness,
+                provider=make_provider_choice(
+                    downloader=FakeDownloader(), name="Broken", ready=False
+                ),
+            )
+        )
+        await drain(harness.queue)
+
+    assert texts.PROVIDER_MISCONFIGURED.format(provider="Broken") in edited_texts(harness)
 
 
 class TestTheWorkerCannotDieQuietly:

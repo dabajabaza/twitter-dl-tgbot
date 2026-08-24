@@ -269,7 +269,7 @@ class YtDlpDownloader:
             "outtmpl": {"default": "%(id)s.%(ext)s"},
             "paths": {"home": str(dest)},
             "allowed_extractors": list(self._profile.allowed_extractors),
-            # A tweet holding several videos is a playlist to yt-dlp, and all of
+            # A post holding several videos is a playlist to yt-dlp, and all of
             # them are wanted.
             "noplaylist": False,
             "restrictfilenames": True,

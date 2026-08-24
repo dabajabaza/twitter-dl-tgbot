@@ -10,10 +10,10 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.session.base import BaseSession
 from aiogram.methods import EditMessageText, SendMessage, SendVideo, TelegramMethod
 from aiogram.methods.get_me import GetMe
-from aiogram.types import CallbackQuery, Chat, Message, Update
+from aiogram.types import CallbackQuery, Chat, Message, MessageEntity, Update
 from aiogram.types import User as TgUser
 
-from clipivore.runtime.worker import RequestQueue
+from clipivore.runtime.worker import Request, RequestQueue
 from clipivore.services.overflow import OverflowCatalog
 from clipivore.services.providers import ProviderCatalog
 
@@ -110,11 +110,32 @@ def make_update_message(
     chat_id: int | None = None,
     chat_type: str = "private",
     update_id: int = 1,
+    hidden_links: dict[str, str] | None = None,
 ) -> Update:
+    """One message from one person.
+
+    ``hidden_links`` maps a run of the text to the URL hiding behind it — how a
+    link arrives when somebody sends formatted text rather than a bare URL. It
+    lives in the entities, not in the text, which is why the handler reads both.
+    """
     chat = Chat(id=chat_id if chat_id is not None else user_id, type=chat_type)
     user = TgUser(id=user_id, is_bot=False, first_name="Test")
+    entities = [
+        MessageEntity(
+            type="text_link",
+            offset=text.index(label),
+            length=len(label),
+            url=url,
+        )
+        for label, url in (hidden_links or {}).items()
+    ]
     message = Message(
-        message_id=update_id, date=datetime.now(UTC), chat=chat, from_user=user, text=text
+        message_id=update_id,
+        date=datetime.now(UTC),
+        chat=chat,
+        from_user=user,
+        text=text,
+        entities=entities or None,
     )
     return Update(update_id=update_id, message=message)
 
@@ -162,9 +183,30 @@ class BotHarness:
         self._next_update_id += 1
         return self._next_update_id
 
-    async def send(self, text: str, *, user_id: int = 1, chat_type: str = "private") -> None:
+    async def take(self, timeout: float = 2.0) -> Request:
+        """The next queued Request, or a prompt failure if nothing was queued.
+
+        A bare `queue.take()` waits forever, so a change that stops a link from
+        being enqueued turns every test that reads the queue into a hang with no
+        output — which is how an environment leak once cost a whole test run.
+        """
+        async with asyncio.timeout(timeout):
+            return await self.queue.take()
+
+    async def send(
+        self,
+        text: str,
+        *,
+        user_id: int = 1,
+        chat_type: str = "private",
+        hidden_links: dict[str, str] | None = None,
+    ) -> None:
         update = make_update_message(
-            text, user_id=user_id, chat_type=chat_type, update_id=self._update_id()
+            text,
+            user_id=user_id,
+            chat_type=chat_type,
+            update_id=self._update_id(),
+            hidden_links=hidden_links,
         )
         await self.dp.feed_update(self.bot, update)
 

@@ -99,7 +99,7 @@ signal the whole arrangement exists for.
 **A residual risk, accepted deliberately.** A protected account the owner
 follows answers, with dead cookies, in exactly the same words as a stranger's
 protected account ("not authorized to view this protected tweet") — the two
-cannot be told apart from the message. Such a case lands in `TweetUnavailable`
+cannot be told apart from the message. Such a case lands in `PostUnavailable`
 and the owner is not woken. The choice favours a rare miss over a frequent false
 alarm: an alert is worth exactly as much as it is believed. If protected
 accounts turn out to be the main use case, a heuristic will be needed (waking
@@ -439,10 +439,11 @@ as a caption says nothing about what the video is.
 label links to the tweet. The HTML lives in `bot/captions.py` — the one module
 allowed to emit markup (D10). Telegram counts the 1024-unit caption limit on the
 *rendered* text in UTF-16 code units, markup excluded, so the budget for the
-tweet's text is 1024 minus the rendered footer minus the separator; the footer
-is appended after fitting and is never truncated. The trailing `t.co` pointer X
-appends to its own media is stripped from the text (`services/downloader.py`);
-one in mid-sentence is the author's words and stays.
+post's text is 1024 minus the rendered footer minus the separator; the footer
+is appended after fitting and is never truncated. Link furniture a platform
+appends to its own text is stripped by that Provider's
+`EngineProfile.clean_description` — for X, the trailing `t.co` pointer
+(`providers/x.py`); one in mid-sentence is the author's words and stays.
 
 Once everything a user's message asked for arrived, the message itself is
 deleted. One message can hold several links, so the handler creates one
@@ -482,9 +483,12 @@ scanning that package the way Overflow Adapters are discovered
 ([ADR 0003](adr/0003-discovered-providers.md), following
 [ADR 0002](adr/0002-discovered-overflow-adapters.md)). It declares the link
 shapes it claims as class attributes, carries its own `Downloader`, and resolves
-its own short links. The catalog builds one combined pattern from every
-Provider, so a message's links come back in the order a person wrote them across
-platforms as well as within one. yt-dlp stays behind one file (D12): a
+its own short links. The catalog runs each Provider's own
+compiled patterns and merges the matches by position — never splicing their
+source text together, which would silently discard the flags and group numbering
+each was compiled with. Links therefore come back in the order they appear,
+across platforms as well as within one, and where two Providers overlap the one
+matching more of the URL wins. yt-dlp stays behind one file (D12): a
 yt-dlp-shaped Provider parametrises the shared engine with an `EngineProfile`,
 while a platform yt-dlp cannot serve may bring its own engine.
 
@@ -498,7 +502,8 @@ that fails to construct is still recognised by its patterns, so its links get a
 verdict naming it instead of the silence an unknown link earns; a Provider that
 fails to *import* has no readable patterns, so its links do fall through and the
 startup log is the only place that shows. Neither can stop the bot, and neither
-hides the other Providers. Verdict strings name the platform through a
+hides the other Providers — but *no* working Provider is fatal at startup rather
+than a bot that reports health and refuses every link (the D16 argument). Verdict strings name the platform through a
 `{provider}` placeholder rather than spelling it, so one string inventory serves
 them all (D10).
 

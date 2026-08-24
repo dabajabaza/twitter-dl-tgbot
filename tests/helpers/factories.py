@@ -7,6 +7,7 @@ from typing import Any
 
 from clipivore.config import Settings
 from clipivore.domain import Clip, Downloader
+from clipivore.services.cookies import CookieSession
 from clipivore.services.providers import Provider, ProviderChoice, ProviderContext, ProviderState
 
 _POST_LINK = re.compile(r"https?://x\.com/[^/]+/status/(?P<id>\d+)")
@@ -64,7 +65,7 @@ def make_provider_choice(
     downloader: Downloader | None = None,
     provider_id: str = "x",
     name: str = "X",
-    cookies: object | None = None,
+    cookies: CookieSession | None = None,
     ready: bool = True,
 ) -> ProviderChoice:
     """A Provider the worker can be driven with, without importing an engine.

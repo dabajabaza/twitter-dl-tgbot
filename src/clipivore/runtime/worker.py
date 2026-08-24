@@ -36,6 +36,7 @@ from clipivore.errors import (
     PostUnavailable,
     ProviderMisconfigured,
 )
+from clipivore.services.cookies import CookieSession
 from clipivore.services.delivery import DeliveryResult, OverflowDelivery
 from clipivore.services.overflow import OverflowChoice
 from clipivore.services.providers import Provider, ProviderChoice
@@ -187,7 +188,7 @@ class OwnerAlerts:
         self._alerted: dict[str, tuple[float, int] | None] = {}
 
     async def auth_expired(self, provider: ProviderChoice, detail: str) -> None:
-        cookies = getattr(provider.provider, "cookies", None)
+        cookies = provider.provider.cookies if provider.provider else None
         version = cookies.version() if cookies else None
         # `None` means "cannot tell which export this is" — the file is being
         # replaced right now, or stat failed. That is not evidence of a new
@@ -216,8 +217,8 @@ class OwnerAlerts:
         self._alerted[provider.provider_id] = version
 
 
-def _cookies_path(cookies: object | None) -> str:
-    source = getattr(cookies, "source", None)
+def _cookies_path(cookies: CookieSession | None) -> str:
+    source = cookies.source if cookies else None
     return str(source) if source else "COOKIES_FILE"
 
 
@@ -425,6 +426,11 @@ def _serving(request: Request) -> Provider:
     A Provider that failed to construct still claims its links — that is what
     turns a broken platform from silence into a named refusal — so this is where
     the claim stops and the refusal starts.
+
+    Defence in depth: the handler refuses a broken Provider before a Request is
+    ever built, so in a running bot this never fires. It stays because "the
+    worker trusts request.provider.provider to exist" is the kind of assumption
+    that quietly stops being true.
     """
     provider = request.provider.provider
     if provider is None:

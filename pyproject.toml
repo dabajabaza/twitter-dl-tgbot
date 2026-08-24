@@ -10,8 +10,8 @@ authors = [
 ]
 dependencies = [
     "aiogram>=3.30.0",
-    # Imported directly (services/links.py resolves t.co redirects), so it is a
-    # declared dependency rather than something inherited from aiogram.
+    # Imported directly (services/redirects.py follows a Provider's short links),
+    # so it is a declared dependency rather than something inherited from aiogram.
     "aiohttp>=3.14.1",  # floor kept at the ports version; see [tool.uv] below
     # aiogram builds a proxied connector through this package and imports it
     # lazily, so without it AiohttpSession(proxy=…) raises at construction —

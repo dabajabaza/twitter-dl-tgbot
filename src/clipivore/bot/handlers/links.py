@@ -38,7 +38,13 @@ class HasPostLinks(Filter):
 
 
 def _hidden_urls(message: Message) -> Iterator[str]:
-    """URLs that live in formatting rather than in the text a person can see."""
+    """URLs that live in formatting rather than in the text a person can see.
+
+    Handed to the catalog as their own source, so they queue after the visible
+    links rather than in the position they were written at. Entities do carry an
+    offset, so interleaving them properly is possible — it has just never been
+    worth it for a message holding one of each.
+    """
     for entity in (*(message.entities or ()), *(message.caption_entities or ())):
         if entity.type == "text_link" and entity.url:
             yield entity.url
@@ -63,16 +69,18 @@ async def enqueue_links(
         bot, chat_id=message.chat.id, message_id=message.message_id, expected=len(links)
     )
     for link in links:
-        status = await message.answer(texts.QUEUED)
-        reporter = ProgressReporter(bot, chat_id=status.chat.id, message_id=status.message_id)
         if not link.choice.ready:
             # Claimed by a Provider that could not be built. Refusing here
             # rather than in the worker keeps a broken platform from spending a
-            # queue slot, and names it instead of ignoring the link.
+            # queue slot, and names it instead of ignoring the link. The verdict
+            # is known before any await, so it is said once — no "Queued…" that
+            # exists only to be edited away a moment later.
             logger.info("refused %s: provider %s is broken", link.url, link.choice.provider_id)
             source.abandon()
-            await reporter.finish(texts.PROVIDER_MISCONFIGURED.format(provider=link.choice.name))
+            await message.answer(texts.PROVIDER_MISCONFIGURED.format(provider=link.choice.name))
             continue
+        status = await message.answer(texts.QUEUED)
+        reporter = ProgressReporter(bot, chat_id=status.chat.id, message_id=status.message_id)
         request = Request(
             url=link.url,
             chat_id=message.chat.id,

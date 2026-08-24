@@ -99,6 +99,47 @@ class XSettings(BaseSettings):
         return value
 
 
+# What the shared engine needs to know about X. A description of the platform,
+# not of this installation — so it is built once here rather than per instance,
+# and reading it costs no configuration.
+PROFILE = EngineProfile(
+    allowed_extractors=("twitter.*",),
+    account_state_markers=(
+        "protected",
+        "suspended",
+        "deleted",
+        "no longer exists",
+        "does not exist",
+        "doesn't exist",
+        "not found",
+    ),
+    auth_markers=(
+        "nsfw",
+        "requires authentication",
+        "only available for registered users",
+        "log in",
+        "login",
+        "sign in",
+        "logged in",
+        "authoriz",
+        "authenticat",
+        "cookies",
+        "account is required",
+        "age-restricted",
+        "age restricted",
+    ),
+    no_video_markers=(
+        "no video could be found",
+        "no video",
+        "is not a video",
+        "no media",
+    ),
+    unavailable_markers=("unavailable", "private"),
+    clean_description=lambda text: _TRAILING_TCO.sub("", text),
+    profile_url=lambda handle: f"https://x.com/{handle}",
+)
+
+
 class XProvider(Provider):
     name: ClassVar[str] = "X"
     hint: ClassVar[str] = "x.com/<user>/status/<id> — t.co short links work too"
@@ -115,46 +156,7 @@ class XProvider(Provider):
             raise ValueError(f"COOKIES_FILE must be a file, got directory {cookies_file}")
         self.cookies = CookieSession(cookies_file)
         self._proxy = context.proxy
-        self._downloader = YtDlpDownloader(
-            EngineProfile(
-                allowed_extractors=("twitter.*",),
-                account_state_markers=(
-                    "protected",
-                    "suspended",
-                    "deleted",
-                    "no longer exists",
-                    "does not exist",
-                    "doesn't exist",
-                    "not found",
-                ),
-                auth_markers=(
-                    "nsfw",
-                    "requires authentication",
-                    "only available for registered users",
-                    "log in",
-                    "login",
-                    "sign in",
-                    "logged in",
-                    "authoriz",
-                    "authenticat",
-                    "cookies",
-                    "account is required",
-                    "age-restricted",
-                    "age restricted",
-                ),
-                no_video_markers=(
-                    "no video could be found",
-                    "no video",
-                    "is not a video",
-                    "no media",
-                ),
-                unavailable_markers=("unavailable", "private"),
-                clean_description=_strip_trailing_tco,
-                profile_url=lambda handle: f"https://x.com/{handle}",
-            ),
-            cookies=self.cookies,
-            proxy=context.proxy,
-        )
+        self._downloader = YtDlpDownloader(PROFILE, cookies=self.cookies, proxy=context.proxy)
 
     @property
     def downloader(self) -> Downloader:
@@ -172,10 +174,6 @@ class XProvider(Provider):
             proxy=self._proxy,
             outside_message=f"{url} leads outside X",
         )
-
-
-def _strip_trailing_tco(text: str) -> str:
-    return _TRAILING_TCO.sub("", text)
 
 
 def _posts_in(text: str) -> list[str]:

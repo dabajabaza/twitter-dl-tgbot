@@ -17,7 +17,7 @@ from clipivore.errors import (
     NoVideoInPost,
     PostUnavailable,
 )
-from clipivore.providers.x import XProvider
+from clipivore.providers import x as x_provider
 from clipivore.services import downloader as module
 from clipivore.services.providers import ProviderCatalog, ProviderChoice, ProviderContext
 
@@ -26,8 +26,10 @@ LOGIN_HINT = InfoExtractor._login_hint(InfoExtractor)
 TWEET = "https://x.com/someone/status/1234567890"
 
 # The real thing, not a stand-in: these tests are about how X's own sentences
-# and metadata are read, so a hand-written profile would test the test.
-X_PROFILE = XProvider(ProviderContext())._downloader._profile
+# and metadata are read, so a hand-written profile would test the test. Read as
+# a declaration rather than built from a constructed Provider, so collecting
+# this module cannot depend on what is in the environment.
+X_PROFILE = x_provider.PROFILE
 
 
 def clips_from_info(info: object, url: str) -> list[Clip]:
