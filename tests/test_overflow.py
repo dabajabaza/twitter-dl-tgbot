@@ -1,115 +1,114 @@
-"""Configured Adapter loading and the Owner's persisted choice."""
+"""Adapter discovery and the Owner's persisted choice."""
 
 from pathlib import Path
 
 import pytest
 
 from twitter_dl.services import overflow as module
-from twitter_dl.services.overflow import OverflowCatalog, OverflowState
+from twitter_dl.services.overflow import OverflowCatalog, OverflowChoice, OverflowState
 
-GOOD = "tests.helpers.overflow_adapters:create"
-BAD_CONFIG = "tests.helpers.overflow_adapters:misconfigured"
-
-
-def catalog(
-    tmp_path: Path, adapters: dict[str, object], *, default: str = "none"
-) -> OverflowCatalog:
-    return OverflowCatalog(adapters, default=default, state_file=tmp_path / "selection")
+FAKES = "tests.helpers.fake_adapters"
+EMPTY = "tests.helpers.no_adapters"
 
 
-def test_a_full_factory_path_becomes_a_ready_menu_choice(tmp_path: Path) -> None:
-    choices = catalog(tmp_path, {"test": GOOD}).choices
-
-    assert len(choices) == 1
-    assert choices[0].state is OverflowState.READY
-    assert choices[0].label == "Test destination"
+def catalog(tmp_path: Path, package: str = FAKES) -> OverflowCatalog:
+    return OverflowCatalog(package, state_file=tmp_path / "selection")
 
 
-def test_a_missing_factory_is_a_visible_state_not_a_startup_failure(tmp_path: Path) -> None:
-    choices = catalog(tmp_path, {"gone": "twitter_dl.adapters.gone:create"}).choices
-
-    assert choices[0].state is OverflowState.MISSING
+def choice_of(source: OverflowCatalog, adapter_id: str) -> OverflowChoice:
+    return next(choice for choice in source.choices if choice.adapter_id == adapter_id)
 
 
-def test_invalid_adapter_settings_are_isolated_from_the_bot(tmp_path: Path) -> None:
-    choices = catalog(tmp_path, {"broken": BAD_CONFIG}).choices
+class TestDiscovery:
+    def test_a_destination_subclass_in_the_package_is_a_ready_choice(self, tmp_path: Path) -> None:
+        choice = choice_of(catalog(tmp_path), "test")
 
-    assert choices[0].state is OverflowState.MISCONFIGURED
+        assert choice.state is OverflowState.READY
+        assert choice.label == "Test destination"
 
+    def test_the_built_in_adapters_are_discovered_under_their_class_labels(
+        self, tmp_path: Path
+    ) -> None:
+        # Their state depends on the environment (rclone, SHARE_* variables),
+        # but discovery itself and the class-attribute labels do not.
+        found = OverflowCatalog(state_file=tmp_path / "selection")
 
-def test_a_malformed_factory_value_is_isolated_from_the_bot(tmp_path: Path) -> None:
-    choices = catalog(tmp_path, {"broken": {"path": GOOD}}).choices
+        assert choice_of(found, "share").label == "Share"
+        assert choice_of(found, "yandex_disk").label == "Yandex Disk"
 
-    assert choices[0].state is OverflowState.MISCONFIGURED
+    def test_underscore_modules_are_helpers_not_adapters(self, tmp_path: Path) -> None:
+        ids = [choice.adapter_id for choice in catalog(tmp_path).choices]
 
+        assert "_helper" not in ids
 
-def test_a_factory_attribute_lookup_failure_is_isolated(tmp_path: Path) -> None:
-    choices = catalog(
-        tmp_path,
-        {"broken": "tests.helpers.overflow_adapters:exploding_attribute"},
-    ).choices
+    def test_an_empty_package_yields_an_empty_catalog(self, tmp_path: Path) -> None:
+        assert catalog(tmp_path, EMPTY).choices == ()
 
-    assert choices[0].state is OverflowState.MISCONFIGURED
+    def test_a_broken_adapter_keeps_the_label_its_class_declares(self, tmp_path: Path) -> None:
+        # The class imported fine; only construction failed. The Menu must
+        # name the Adapter the way its author did, not guess from the file.
+        choice = choice_of(catalog(tmp_path), "misconfigured")
 
+        assert choice.state is OverflowState.MISCONFIGURED
+        assert choice.label == "Broken"
 
-def test_system_exit_from_a_factory_is_isolated(tmp_path: Path) -> None:
-    choices = catalog(tmp_path, {"broken": "sys:exit"}).choices
+    def test_an_ambiguous_module_is_named_from_its_file(self, tmp_path: Path) -> None:
+        # Two classes imported, so neither label can be trusted to be "the"
+        # Adapter's name — the file name is the only honest one left.
+        assert choice_of(catalog(tmp_path), "ambiguous").label == "Ambiguous"
 
-    assert choices[0].state is OverflowState.MISCONFIGURED
+    @pytest.mark.parametrize(
+        ("adapter_id", "why"),
+        [
+            ("misconfigured", "construction raised, like missing env settings"),
+            ("needs_arguments", "the zero-argument construction contract"),
+            ("duck", "no OverflowDestination subclass in the module"),
+            ("synchronous", "store is not async"),
+            ("wrong_signature", "store cannot take (source, *, name)"),
+            ("ambiguous", "two subclasses in one module"),
+            ("property_label", "label must be a class attribute"),
+            ("blank_label", "label must not be blank"),
+            ("crashing", "the module raised on import"),
+            ("exiting", "the module raised SystemExit on import"),
+            ("none", "the module name collides with Off"),
+            ("packaged", "an Adapter is a single module, not a package"),
+        ],
+    )
+    def test_every_malformed_module_is_isolated_as_misconfigured(
+        self, tmp_path: Path, adapter_id: str, why: str
+    ) -> None:
+        choice = choice_of(catalog(tmp_path), adapter_id)
 
+        assert choice.state is OverflowState.MISCONFIGURED, why
+        assert choice.destination is None
 
-def test_system_exit_during_module_import_is_isolated(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def exit_on_import(name: str) -> object:
-        raise SystemExit("bad plugin")
+    def test_only_ready_adapters_and_off_are_selectable(self, tmp_path: Path) -> None:
+        choices = catalog(tmp_path)
 
-    monkeypatch.setattr(module.importlib, "import_module", exit_on_import)
+        assert [choice.adapter_id for choice in choices.selectable] == ["none", "test"]
 
-    choices = catalog(tmp_path, {"broken": "bad.plugin:create"}).choices
-
-    assert choices[0].state is OverflowState.MISCONFIGURED
-
-
-def test_the_validated_adapter_label_is_read_only_once(tmp_path: Path) -> None:
-    choices = catalog(
-        tmp_path,
-        {"stateful": "tests.helpers.overflow_adapters:stateful_label"},
-    ).choices
-
-    assert choices[0].state is OverflowState.READY
-    assert choices[0].label == "Read once"
-
-
-@pytest.mark.parametrize(
-    "factory",
-    [
-        "tests.helpers.overflow_adapters:duck",
-        "tests.helpers.overflow_adapters:synchronous",
-        "tests.helpers.overflow_adapters:wrong_signature",
-    ],
-)
-def test_only_the_enforced_async_interface_becomes_ready(tmp_path: Path, factory: str) -> None:
-    choices = catalog(tmp_path, {"broken": factory}).choices
-
-    assert choices[0].state is OverflowState.MISCONFIGURED
+    def test_a_broken_adapter_cannot_be_selected(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="not selectable"):
+            catalog(tmp_path).select("misconfigured")
 
 
 def test_the_owner_selection_survives_a_restart(tmp_path: Path) -> None:
     state_file = tmp_path / "selection"
-    first = OverflowCatalog({"test": GOOD}, default="none", state_file=state_file)
+    first = OverflowCatalog(FAKES, state_file=state_file)
     first.select("test")
 
-    restarted = OverflowCatalog({"test": GOOD}, default="none", state_file=state_file)
+    restarted = OverflowCatalog(FAKES, state_file=state_file)
 
     assert restarted.current.adapter_id == "test"
     assert restarted.current.ready
 
 
+def test_without_a_persisted_selection_overflow_starts_off(tmp_path: Path) -> None:
+    assert catalog(tmp_path).current.state is OverflowState.OFF
+
+
 @pytest.mark.parametrize("broken_file", ["directory", "invalid-utf8", "empty"])
-def test_an_unreadable_selection_disables_only_overflow_without_using_the_default(
-    tmp_path: Path, broken_file: str
-) -> None:
+def test_an_unreadable_selection_disables_only_overflow(tmp_path: Path, broken_file: str) -> None:
     state_file = tmp_path / "selection"
     if broken_file == "directory":
         state_file.mkdir()
@@ -118,7 +117,7 @@ def test_an_unreadable_selection_disables_only_overflow_without_using_the_defaul
     else:
         state_file.write_bytes(b"\xff")
 
-    restarted = OverflowCatalog({"test": GOOD}, default="test", state_file=state_file)
+    restarted = OverflowCatalog(FAKES, state_file=state_file)
 
     assert restarted.current.adapter_id == module.SAVED_SELECTION_ID
     assert restarted.current.state is OverflowState.MISCONFIGURED
@@ -127,7 +126,7 @@ def test_an_unreadable_selection_disables_only_overflow_without_using_the_defaul
 def test_selecting_after_a_non_file_error_quarantines_it_and_recovers(tmp_path: Path) -> None:
     state_file = tmp_path / "selection"
     state_file.mkdir()
-    restarted = OverflowCatalog({"test": GOOD}, default="test", state_file=state_file)
+    restarted = OverflowCatalog(FAKES, state_file=state_file)
 
     restarted.select("none")
 
@@ -142,7 +141,7 @@ def test_a_state_symlink_is_misconfigured_and_quarantined_on_recovery(tmp_path: 
     target.write_text("none\n")
     state_file = tmp_path / "selection"
     state_file.symlink_to(target)
-    restarted = OverflowCatalog({"test": GOOD}, default="test", state_file=state_file)
+    restarted = OverflowCatalog(FAKES, state_file=state_file)
 
     assert restarted.current.state is OverflowState.MISCONFIGURED
 
@@ -158,7 +157,7 @@ def test_a_predictable_old_temp_symlink_is_never_followed(tmp_path: Path) -> Non
     victim = tmp_path / "victim"
     victim.write_text("keep me")
     (tmp_path / ".selection.tmp").symlink_to(victim)
-    choices = OverflowCatalog({}, default="none", state_file=state_file)
+    choices = OverflowCatalog(EMPTY, state_file=state_file)
 
     choices.select("none")
 
@@ -171,7 +170,7 @@ def test_staging_failure_leaves_a_non_regular_state_in_place(
 ) -> None:
     state_file = tmp_path / "selection"
     state_file.mkdir()
-    choices = OverflowCatalog({}, default="none", state_file=state_file)
+    choices = OverflowCatalog(EMPTY, state_file=state_file)
 
     def fail_staging(*args: object, **kwargs: object) -> object:
         raise OSError("disk full")
@@ -189,7 +188,7 @@ def test_replace_failure_rolls_a_quarantined_state_back(
 ) -> None:
     state_file = tmp_path / "selection"
     state_file.mkdir()
-    choices = OverflowCatalog({}, default="none", state_file=state_file)
+    choices = OverflowCatalog(EMPTY, state_file=state_file)
     real_replace = module.os.replace
     failed = False
 
@@ -207,7 +206,7 @@ def test_replace_failure_rolls_a_quarantined_state_back(
 
     assert state_file.is_dir()
     assert not (tmp_path / "selection.corrupt").exists()
-    restarted = OverflowCatalog({}, default="none", state_file=state_file)
+    restarted = OverflowCatalog(EMPTY, state_file=state_file)
     assert restarted.current.state is OverflowState.MISCONFIGURED
 
 
@@ -216,7 +215,7 @@ def test_failed_install_and_rollback_leave_durable_recovery_evidence(
 ) -> None:
     state_file = tmp_path / "selection"
     state_file.mkdir()
-    choices = OverflowCatalog({"test": GOOD}, default="test", state_file=state_file)
+    choices = OverflowCatalog(FAKES, state_file=state_file)
     real_replace = module.os.replace
 
     def fail_every_primary_replace(source: Path, destination: Path) -> None:
@@ -232,18 +231,20 @@ def test_failed_install_and_rollback_leave_durable_recovery_evidence(
     assert not state_file.exists()
     assert (tmp_path / "selection.corrupt").is_dir()
     assert (tmp_path / "selection.recovery").is_file()
-    restarted = OverflowCatalog({"test": GOOD}, default="test", state_file=state_file)
+    restarted = OverflowCatalog(FAKES, state_file=state_file)
     assert restarted.current.state is OverflowState.MISCONFIGURED
 
 
-def test_recovery_marker_blocks_default_after_an_interrupted_quarantine(tmp_path: Path) -> None:
+def test_recovery_marker_blocks_the_off_fallback_after_an_interrupted_quarantine(
+    tmp_path: Path,
+) -> None:
     state_file = tmp_path / "selection"
     state_file.mkdir()
-    choices = OverflowCatalog({"test": GOOD}, default="test", state_file=state_file)
+    choices = OverflowCatalog(FAKES, state_file=state_file)
     choices._ensure_recovery_marker()
     state_file.rename(tmp_path / "selection.corrupt")
 
-    restarted = OverflowCatalog({"test": GOOD}, default="test", state_file=state_file)
+    restarted = OverflowCatalog(FAKES, state_file=state_file)
 
     assert restarted.current.state is OverflowState.MISCONFIGURED
 
@@ -252,7 +253,7 @@ def test_cleanup_of_a_moved_staging_path_cannot_fail_the_selection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     state_file = tmp_path / "selection"
-    choices = OverflowCatalog({}, default="none", state_file=state_file)
+    choices = OverflowCatalog(EMPTY, state_file=state_file)
     real_unlink = Path.unlink
 
     def fail_staging_unlink(path: Path, *, missing_ok: bool = False) -> None:
@@ -281,7 +282,7 @@ def test_unexpected_recovery_marker_is_preserved_and_owner_can_recover(
         target = tmp_path / "marker-target"
         target.write_text("unrelated data")
         marker.symlink_to(target)
-    choices = OverflowCatalog({"test": GOOD}, default="test", state_file=state_file)
+    choices = OverflowCatalog(FAKES, state_file=state_file)
 
     assert choices.current.state is OverflowState.MISCONFIGURED
 
@@ -296,27 +297,7 @@ def test_a_removed_selection_stays_missing_until_the_owner_changes_it(tmp_path: 
     state_file = tmp_path / "selection"
     state_file.write_text("removed\n")
 
-    restarted = OverflowCatalog({"test": GOOD}, default="test", state_file=state_file)
+    restarted = OverflowCatalog(FAKES, state_file=state_file)
 
     assert restarted.current.adapter_id == "removed"
     assert restarted.current.state is OverflowState.MISSING
-
-
-def test_a_broken_adapter_cannot_be_selected(tmp_path: Path) -> None:
-    choices = catalog(tmp_path, {"broken": BAD_CONFIG})
-
-    with pytest.raises(ValueError, match="not selectable"):
-        choices.select("broken")
-
-
-def test_only_ready_adapters_and_off_are_selectable(tmp_path: Path) -> None:
-    choices = catalog(
-        tmp_path,
-        {
-            "ready": GOOD,
-            "missing": "twitter_dl.adapters.gone:create",
-            "broken": BAD_CONFIG,
-        },
-    )
-
-    assert [choice.adapter_id for choice in choices.selectable] == ["none", "ready"]

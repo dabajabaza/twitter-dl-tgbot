@@ -1,10 +1,9 @@
 """Application configuration, loaded from the environment / ``.env`` file."""
 
 from pathlib import Path
-from typing import Annotated
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -13,7 +12,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        env_nested_delimiter="__",
         extra="ignore",
         populate_by_name=True,
     )
@@ -69,16 +67,6 @@ class Settings(BaseSettings):
         alias="DOWNLOAD_DIR",
         description="Scratch space; one subdirectory per request, removed when it finishes",
     )
-    overflow_adapters: Annotated[dict[str, object], NoDecode] = Field(
-        default_factory=dict,
-        alias="OVERFLOW_ADAPTERS",
-        description="Adapter id to full module:create factory path",
-    )
-    overflow_default: str = Field(
-        default="none",
-        alias="OVERFLOW_DEFAULT",
-        description="Overflow Adapter selected when no persisted Owner choice exists",
-    )
     queue_limit: int = Field(
         default=5,
         alias="QUEUE_LIMIT",
@@ -110,20 +98,6 @@ class Settings(BaseSettings):
         """
         if isinstance(value, str) and not value.strip():
             return None
-        return value
-
-    @field_validator("overflow_adapters", mode="before")
-    @classmethod
-    def _malformed_overflow_mapping_is_an_adapter_problem(cls, value: object) -> object:
-        """Keep an optional feature's malformed base variable from killing the bot.
-
-        Documented configuration uses one nested ``OVERFLOW_ADAPTERS__ID`` line
-        per Adapter. If somebody sets the base variable instead, preserve it as
-        a broken factory entry so Menu reports the problem while Chat delivery
-        remains available.
-        """
-        if isinstance(value, str):
-            return {"configuration": value} if value.strip() else {}
         return value
 
     @property

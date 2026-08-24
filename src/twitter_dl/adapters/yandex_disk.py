@@ -22,8 +22,10 @@ class YandexDiskSettings(RcloneSettings):
 class YandexDiskDestination(OverflowDestination):
     label = "Yandex Disk"
 
-    def __init__(self, settings: YandexDiskSettings) -> None:
-        self._settings = settings
+    def __init__(self, settings: YandexDiskSettings | None = None) -> None:
+        # Discovery constructs Adapters with no arguments (ADR 0002), so the
+        # default reads YANDEX_DISK_* from the environment; tests inject their own.
+        self._settings = settings if settings is not None else YandexDiskSettings()
 
     async def store(self, source: Path, *, name: str) -> str:
         remote_path = f"{self._settings.rclone_remote}/{name}"
@@ -38,7 +40,3 @@ class YandexDiskDestination(OverflowDestination):
         if not link:
             raise RuntimeError("rclone link returned no public URL")
         return link.splitlines()[-1]
-
-
-def create() -> YandexDiskDestination:
-    return YandexDiskDestination(YandexDiskSettings())

@@ -34,9 +34,10 @@ async def harness(settings: Settings) -> AsyncIterator[BotHarness]:
     session = RecordingSession()
     bot = Bot(token=settings.bot_token, session=session)
     queue = RequestQueue(settings.queue_limit)
+    # An empty adapters package: tests that need adapters build their own
+    # catalog from tests.helpers.fake_adapters and swap it into dp.
     overflow_catalog = OverflowCatalog(
-        settings.overflow_adapters,
-        default=settings.overflow_default,
+        "tests.helpers.no_adapters",
         state_file=settings.overflow_state_file,
     )
     dp = build_dispatcher(settings, queue, overflow_catalog)
