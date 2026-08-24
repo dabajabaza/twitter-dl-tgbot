@@ -16,7 +16,7 @@ from twitter_dl.bot import texts
 from twitter_dl.bot.captions import build_caption
 from twitter_dl.bot.progress import ProgressReporter
 from twitter_dl.config import Settings
-from twitter_dl.domain import Clip, ProgressCallback
+from twitter_dl.domain import Clip, DownloadProgress, ProgressCallback
 from twitter_dl.errors import AuthExpired, DownloadTooLarge, NoVideoInTweet, TweetUnavailable
 from twitter_dl.runtime.worker import (
     OwnerAlerts,
@@ -24,6 +24,7 @@ from twitter_dl.runtime.worker import (
     RequestQueue,
     RequestWorker,
     SourceMessage,
+    _progress_into,
 )
 from twitter_dl.services.cookies import CookieSession
 from twitter_dl.services.delivery import ChatDelivery, DeliveryResult, OverflowDelivery
@@ -57,7 +58,7 @@ class FakeDownloader:
         self.destinations.append(dest)
         self.max_bytes.append(max_bytes)
         if on_progress is not None:
-            on_progress("50%")
+            on_progress(DownloadProgress(text="50% of 82 MB", stream="video"))
         if self._delay:
             await asyncio.sleep(self._delay)
         if self._error is not None:
@@ -209,8 +210,25 @@ async def test_a_clip_is_delivered_and_the_status_message_steps_aside(
     assert [caption for _, caption, _, _, _ in delivery.delivered] == [
         build_caption("", TWEET, uploader="someone")
     ]
+    # The upload status answers "why is this taking long": it names the size.
+    assert texts.UPLOADING.format(size="0 MB") in edited_texts(harness)
     # The video itself is the answer, so the progress message is removed.
     assert harness.session.calls_of(DeleteMessage)
+
+
+async def test_download_progress_names_the_stream_it_reports(harness: BotHarness) -> None:
+    reporter = ProgressReporter(harness.bot, chat_id=OWNER_ID, message_id=777, min_interval=0.0)
+    report = _progress_into(reporter)
+
+    report(DownloadProgress(text="50% of 82 MB", stream="video"))
+    await asyncio.sleep(0.05)
+    report(DownloadProgress(text="12% of 3 MB", stream="audio"))
+    await asyncio.sleep(0.05)
+
+    statuses = edited_texts(harness)
+    assert texts.DOWNLOADING_VIDEO_PROGRESS.format(progress="50% of 82 MB") in statuses
+    assert texts.DOWNLOADING_AUDIO_PROGRESS.format(progress="12% of 3 MB") in statuses
+    await reporter.close()
 
 
 async def test_a_request_without_working_overflow_caps_the_download_early(
@@ -240,19 +258,26 @@ async def test_a_request_with_working_overflow_keeps_best_quality_unbounded(
 
 
 async def test_crossing_the_limit_with_overflow_off_gets_an_explicit_verdict(
-    harness: BotHarness, settings: Settings
+    harness: BotHarness, settings: Settings, caplog: pytest.LogCaptureFixture
 ) -> None:
     error = DownloadTooLarge(
         limit_bytes=settings.max_tg_video_bytes,
-        observed_bytes=settings.max_tg_video_bytes + 1,
+        observed_bytes=63 * 1024 * 1024,
     )
     worker = build_worker(harness, settings, downloader=FakeDownloader(error=error))
 
-    async with running(worker):
-        harness.queue.submit(make_request(harness, overflow=OFF))
-        await drain(harness.queue)
+    with caplog.at_level("INFO"):
+        async with running(worker):
+            harness.queue.submit(make_request(harness, overflow=OFF))
+            await drain(harness.queue)
 
-    assert texts.OVERFLOW_DISABLED.format(max_mb=settings.max_tg_video_mb) in edited_texts(harness)
+    expected = texts.OVERFLOW_DISABLED.format(
+        max_mb=settings.max_tg_video_mb, observed=" (stopped at 63 MB)"
+    )
+    assert expected in edited_texts(harness)
+    # The verdict text is shared with the final-size refusal; without this log
+    # line an early abort would be indistinguishable from it on the server.
+    assert "stopped early" in caplog.text
 
 
 async def test_every_clip_of_a_tweet_is_delivered_and_numbered(
@@ -275,6 +300,7 @@ async def test_every_clip_of_a_tweet_is_delivered_and_numbered(
         (1, 2),
         (2, 2),
     ]
+    assert texts.UPLOADING_MANY.format(index=1, total=2, size="0 MB") in edited_texts(harness)
 
 
 async def test_final_size_refusal_delivers_none_of_a_multi_clip_request(
@@ -295,7 +321,8 @@ async def test_final_size_refusal_delivers_none_of_a_multi_clip_request(
         await drain(harness.queue)
 
     assert delivery.delivered == []
-    assert texts.OVERFLOW_DISABLED.format(max_mb=1) in edited_texts(harness)
+    expected = texts.OVERFLOW_DISABLED.format(max_mb=1, observed=" (the clip is 2 MB)")
+    assert expected in edited_texts(harness)
 
 
 async def test_an_oversized_clip_is_reported_by_its_overflow_locator(

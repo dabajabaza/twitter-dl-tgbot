@@ -84,6 +84,7 @@ class ClipDelivery:
             raise OverflowUnavailable(
                 adapter_id=overflow.adapter_id,
                 state=overflow.state.value,
+                oversized_bytes=size,
             )
         name = overflow_name(clip, index=index, total=total)
         try:

@@ -50,12 +50,17 @@ class DownloadTooLarge(TwitterDlError):
 
 
 class OverflowUnavailable(TwitterDlError):
-    """The selected Overflow Adapter is off, missing, or misconfigured."""
+    """The selected Overflow Adapter is off, missing, or misconfigured.
 
-    def __init__(self, *, adapter_id: str, state: str) -> None:
+    ``oversized_bytes`` carries the size of the clip that needed the Adapter,
+    when the raise site knows it — the verdict quotes it to the user.
+    """
+
+    def __init__(self, *, adapter_id: str, state: str, oversized_bytes: int | None = None) -> None:
         super().__init__(f"overflow adapter {adapter_id!r} is {state}")
         self.adapter_id = adapter_id
         self.state = state
+        self.oversized_bytes = oversized_bytes
 
 
 class OverflowFailed(TwitterDlError):

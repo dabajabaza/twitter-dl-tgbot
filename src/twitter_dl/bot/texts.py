@@ -38,8 +38,12 @@ QUEUED_POSITION = "Queued — {position} in line."
 QUEUE_FULL = "Queue is full ({limit} requests). Try again in a few minutes."
 DOWNLOADING = "Downloading…"
 DOWNLOADING_PROGRESS = "Downloading… {progress}"
-UPLOADING = "Uploading to Telegram…"
-UPLOADING_MANY = "Uploading to Telegram… ({index}/{total})"
+# X clips usually arrive as separate video and audio files, each reporting its
+# own 0→100%; naming the stream keeps the second run from looking like a restart.
+DOWNLOADING_VIDEO_PROGRESS = "Downloading video… {progress}"
+DOWNLOADING_AUDIO_PROGRESS = "Downloading audio… {progress}"
+UPLOADING = "Uploading to Telegram… ({size})"
+UPLOADING_MANY = "Uploading to Telegram… ({index}/{total}, {size})"
 DELIVERING_OVERFLOW = "Too big for Telegram — delivering through {adapter}…"
 SENT = "Sent."
 # The label bot/captions.py wraps into the link to the tweet itself.
@@ -53,16 +57,20 @@ NETWORK_UNAVAILABLE = "Can't reach X right now (network or proxy is down). Try a
 DOWNLOAD_FAILED = "Download failed. The details are in the bot's log."
 OVERFLOW_FAILED = "Downloaded it, but {adapter} couldn't complete Overflow delivery."
 OVERFLOW_DISABLED = (
-    "This clip is larger than Telegram's {max_mb} MB limit. Overflow delivery is off."
+    "This clip is larger than Telegram's {max_mb} MB limit{observed}. Overflow delivery is off."
 )
 OVERFLOW_MISSING = (
-    "This clip is larger than Telegram's {max_mb} MB limit. The selected Overflow Adapter "
-    "({adapter}) is missing. The owner needs to choose another in Menu."
+    "This clip is larger than Telegram's {max_mb} MB limit{observed}. The selected Overflow "
+    "Adapter ({adapter}) is missing. The owner needs to choose another in Menu."
 )
 OVERFLOW_MISCONFIGURED = (
-    "This clip is larger than Telegram's {max_mb} MB limit. Overflow delivery through "
+    "This clip is larger than Telegram's {max_mb} MB limit{observed}. Overflow delivery through "
     "{adapter} is configured incorrectly. The owner needs to choose another in Menu."
 )
+# How the size in the verdict was learned: an aborted download versus a clip
+# that finished downloading and only then failed the ceiling.
+OVERFLOW_STOPPED_AT = "stopped at {size}"
+OVERFLOW_CLIP_SIZE = "the clip is {size}"
 
 OVERFLOW_MENU = "Overflow delivery\n\nCurrent: {current}"
 OVERFLOW_MENU_PROBLEMS = "Unavailable:\n{problems}"
@@ -101,12 +109,24 @@ def help_message(max_mb: int, overflow: OverflowChoice) -> str:
     return HELP.format(max_mb=max_mb, overflow=detail)
 
 
-def overflow_unavailable(overflow: OverflowChoice, *, max_mb: int) -> str:
+def downloading_progress(stream: str, progress: str) -> str:
+    if stream == "video":
+        return DOWNLOADING_VIDEO_PROGRESS.format(progress=progress)
+    if stream == "audio":
+        return DOWNLOADING_AUDIO_PROGRESS.format(progress=progress)
+    return DOWNLOADING_PROGRESS.format(progress=progress)
+
+
+def overflow_unavailable(overflow: OverflowChoice, *, max_mb: int, observed: str = "") -> str:
+    """The size-limit verdict; ``observed`` says how far the download got."""
+    detail = f" ({observed})" if observed else ""
     if overflow.state is OverflowState.MISSING:
-        return OVERFLOW_MISSING.format(max_mb=max_mb, adapter=overflow.label)
+        return OVERFLOW_MISSING.format(max_mb=max_mb, adapter=overflow.label, observed=detail)
     if overflow.state is OverflowState.MISCONFIGURED:
-        return OVERFLOW_MISCONFIGURED.format(max_mb=max_mb, adapter=overflow_label(overflow))
-    return OVERFLOW_DISABLED.format(max_mb=max_mb)
+        return OVERFLOW_MISCONFIGURED.format(
+            max_mb=max_mb, adapter=overflow_label(overflow), observed=detail
+        )
+    return OVERFLOW_DISABLED.format(max_mb=max_mb, observed=detail)
 
 
 def overflow_menu(catalog: OverflowCatalog) -> str:

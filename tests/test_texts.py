@@ -38,13 +38,18 @@ def test_every_placeholder_is_one_the_caller_actually_supplies() -> None:
         "QUEUE_FULL": {"limit"},
         "QUEUED_POSITION": {"position"},
         "DOWNLOADING_PROGRESS": {"progress"},
-        "UPLOADING_MANY": {"index", "total"},
+        "DOWNLOADING_VIDEO_PROGRESS": {"progress"},
+        "DOWNLOADING_AUDIO_PROGRESS": {"progress"},
+        "UPLOADING": {"size"},
+        "UPLOADING_MANY": {"index", "total", "size"},
         "DELIVERING_OVERFLOW": {"adapter"},
         "OVERFLOW_RESULT": {"size", "adapter", "location"},
         "OVERFLOW_FAILED": {"adapter"},
-        "OVERFLOW_DISABLED": {"max_mb"},
-        "OVERFLOW_MISSING": {"max_mb", "adapter"},
-        "OVERFLOW_MISCONFIGURED": {"max_mb", "adapter"},
+        "OVERFLOW_DISABLED": {"max_mb", "observed"},
+        "OVERFLOW_MISSING": {"max_mb", "adapter", "observed"},
+        "OVERFLOW_MISCONFIGURED": {"max_mb", "adapter", "observed"},
+        "OVERFLOW_STOPPED_AT": {"size"},
+        "OVERFLOW_CLIP_SIZE": {"size"},
         "OVERFLOW_MENU": {"current"},
         "OVERFLOW_MENU_PROBLEMS": {"problems"},
         "OVERFLOW_SELECTED": {"adapter"},
@@ -78,3 +83,25 @@ def test_every_unavailable_overflow_state_gets_an_explicit_verdict(
     choice = OverflowChoice(adapter_id="test", label="Test", state=state)
 
     assert expected in texts.overflow_unavailable(choice, max_mb=50)
+
+
+class TestSizeLimitVerdictDetail:
+    def test_the_observed_size_lands_in_parentheses(self) -> None:
+        choice = OverflowChoice(adapter_id="none", label="none", state=OverflowState.OFF)
+        verdict = texts.overflow_unavailable(choice, max_mb=50, observed="stopped at 63 MB")
+
+        assert "50 MB limit (stopped at 63 MB)." in verdict
+
+    def test_without_an_observation_there_are_no_empty_parentheses(self) -> None:
+        choice = OverflowChoice(adapter_id="none", label="none", state=OverflowState.OFF)
+
+        assert "()" not in texts.overflow_unavailable(choice, max_mb=50)
+
+
+class TestDownloadingProgress:
+    def test_each_stream_is_reported_under_its_own_name(self) -> None:
+        assert texts.downloading_progress("video", "47%") == "Downloading video… 47%"
+        assert texts.downloading_progress("audio", "12%") == "Downloading audio… 12%"
+
+    def test_a_single_file_keeps_the_plain_wording(self) -> None:
+        assert texts.downloading_progress("", "47%") == "Downloading… 47%"
