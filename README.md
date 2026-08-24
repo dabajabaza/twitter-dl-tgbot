@@ -29,7 +29,8 @@ real account, one uplink.
   only make progress reporting lie.
 - The status message says what is moving and how much: `Downloading video… 47%
   of 82 MB`, then the audio stream, then `Uploading to Telegram… (82 MB)`. A
-  size-limit refusal quotes how far the download got.
+  size-limit refusal quotes the size it learned: how far an aborted download
+  got, or the finished clip's actual size.
 - Strangers get silence: the bot does not even confirm that it exists.
 
 ## Stack

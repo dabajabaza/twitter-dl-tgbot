@@ -68,6 +68,10 @@ class TestHumanSize:
     def test_a_gigabyte_scale_file_is_not_reported_as_four_digits_of_megabytes(self) -> None:
         assert texts.human_size(2 * 1024 * 1024 * 1024) == "2.0 GB"
 
+    def test_a_sub_megabyte_file_is_kilobytes_not_a_zero(self) -> None:
+        # A short GIF-mp4 really is this small; "0 MB" reads as a glitch.
+        assert texts.human_size(200 * 1024) == "200 KB"
+
 
 @pytest.mark.parametrize(
     ("state", "expected"),

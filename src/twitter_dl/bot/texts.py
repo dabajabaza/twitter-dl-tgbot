@@ -161,7 +161,11 @@ def overflow_state_label(state: OverflowState) -> str:
 
 def human_size(size_bytes: int) -> str:
     """Size as a person would say it, which is all these numbers are used for."""
-    megabytes = size_bytes / 1024 / 1024
+    kilobytes = size_bytes / 1024
+    megabytes = kilobytes / 1024
     if megabytes >= 1024:
         return f"{megabytes / 1024:.1f} GB"
-    return f"{megabytes:.0f} MB"
+    if megabytes >= 1:
+        return f"{megabytes:.0f} MB"
+    # A short GIF-mp4 is well under a megabyte; "0 MB" would read as a glitch.
+    return f"{kilobytes:.0f} KB"

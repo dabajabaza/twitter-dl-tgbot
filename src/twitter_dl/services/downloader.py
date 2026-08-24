@@ -348,25 +348,32 @@ def _stream_kind(status: dict[str, Any]) -> str:
     With the ``bv*+ba`` selector the video and audio streams download as two
     files and the hook reports each separately; the single-file ``/b``
     fallback (X GIFs, no ffmpeg) carries both codecs and gets no name.
+
+    The audio half is recognised by ``vcodec == "none"`` alone: X's audio
+    renditions come from an HLS ``EXT-X-MEDIA`` entry, for which yt-dlp fills
+    ``vcodec`` but never sets ``acodec`` at all — keying on ``acodec`` would
+    leave the second run of the percentage nameless on every real clip.
     """
     info = status.get("info_dict") or {}
     vcodec = info.get("vcodec")
     acodec = info.get("acodec")
-    has_video = bool(vcodec) and vcodec != "none"
-    has_audio = bool(acodec) and acodec != "none"
-    if has_video and not has_audio:
-        return "video"
-    if has_audio and not has_video:
+    if vcodec == "none":
         return "audio"
+    if vcodec and acodec == "none":
+        return "video"
     return ""
 
 
 def _human_size(size_bytes: float) -> str:
     """Mirror of bot/texts.human_size: a service cannot import the bot layer."""
-    megabytes = size_bytes / 1024 / 1024
+    kilobytes = size_bytes / 1024
+    megabytes = kilobytes / 1024
     if megabytes >= 1024:
         return f"{megabytes / 1024:.1f} GB"
-    return f"{megabytes:.0f} MB"
+    if megabytes >= 1:
+        return f"{megabytes:.0f} MB"
+    # Audio streams run to a few hundred KB; "0 MB" would read as a glitch.
+    return f"{kilobytes:.0f} KB"
 
 
 def _clips_from_info(info: Any, url: str) -> list[Clip]:
