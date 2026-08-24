@@ -3,7 +3,7 @@
 Supersedes [ADR 0001](0001-configured-overflow-adapters.md). Requiring one
 `OVERFLOW_ADAPTERS__*` line per Adapter meant a deployment without those lines
 showed an empty Menu with nothing to select and no hint why. The catalog now
-scans `twitter_dl/adapters/` at startup: every non-underscore module holding
+scans `clipivore/adapters/` at startup: every non-underscore module holding
 exactly one concrete `OverflowDestination` subclass is an Adapter, its file
 name is the stable id, its `label` class attribute names it in Menu, and it is
 constructed with no arguments — settings still come from the subclass's own

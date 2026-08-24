@@ -303,7 +303,7 @@ a database session per request, a unit of work, scope collapsing
 `RequestQueue`, the downloader, the delivery route, and the Overflow catalog)
 are assembled by hand in `__main__._run_bot`; handlers receive them through
 aiogram's workflow data. The Overflow catalog discovers one optional
-`OverflowDestination` Adapter per module of `twitter_dl/adapters/`; each owns
+`OverflowDestination` Adapter per module of `clipivore/adapters/`; each owns
 its prefixed environment settings. Import or configuration failures become
 visible catalog states and cannot stop Chat delivery or bot startup
 ([ADR 0002](adr/0002-discovered-overflow-adapters.md)).

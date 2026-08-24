@@ -67,7 +67,7 @@ functional for clips within Telegram's limit.
 
 ### Optional Overflow Adapters
 
-Every Adapter in `twitter_dl/adapters/` is discovered at startup — there is
+Every Adapter in `clipivore/adapters/` is discovered at startup — there is
 nothing to register. Until its own settings are supplied an Adapter shows in
 Menu as misconfigured; invalid settings never prevent startup, and Chat
 delivery continues to work.
@@ -152,12 +152,20 @@ In `automation/freebsd-server/site.yml`, the `deploy_bots` list:
         home: /home/twitterdl
         owner: twitterdl
         repo_owner: dabajabaza
-        repo_name: twitter-dl-tgbot
-        editable_pth: _editable_impl_twitter_dl.pth
+        repo_name: clipivore-tgbot
+        editable_pth: _editable_impl_clipivore.pth
         editable_target: /home/twitterdl/app/src
         alembic: false
         env_file: /usr/local/etc/twitter-dl.env
 ```
+
+Everything still spelled `twitter` there names something created by hand inside
+the jail, which the rename to `clipivore` deliberately left alone;
+[SERVER-RENAME.md](SERVER-RENAME.md) is the sit-down that changes them. The two
+lines that did change are the ones GitHub owns, and `editable_pth` has to be
+updated **before** the first `clipivore` tag is pushed: it is rewritten only
+inside the new-tag block, so a tag that lands first pins the `.pth` at that one
+release directory and every later release quietly keeps running old code.
 
 `backup_dumps` is left alone: there is no database (ARCHITECTURE.md D9), and the
 jail's dataset is snapshotted by sanoid anyway.
@@ -187,7 +195,7 @@ having them clicked in again. Nothing below needs doing by hand.
 
 ```sh
 uv export --format requirements-txt --no-hashes --no-dev -o requirements.txt  # if dependencies changed
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.5.0 && git push origin v0.5.0
 ```
 
 The server takes it from there, within two minutes. What happened is visible

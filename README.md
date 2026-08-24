@@ -1,4 +1,4 @@
-# twitter-dl-tgbot
+# clipivore-tgbot
 
 A personal Telegram bot: send it a link to a post on X and get the video from
 it, at the best quality available. Downloads run through `yt-dlp` under the
@@ -23,7 +23,7 @@ real account, one uplink.
   larger clips is optional: the owner can switch between the configured
   Overflow Adapters from the bot's Menu.
 - Built-in Overflow Adapters cover an SMB Share and Yandex Disk through
-  `rclone`; every Adapter found in `src/twitter_dl/adapters/` appears in the
+  `rclone`; every Adapter found in `src/clipivore/adapters/` appears in the
   Menu automatically, ready or not. A custom Adapter is one module in that
   package plus its environment configuration.
 - The queue is strictly sequential: there is one uplink, and parallelism would
@@ -46,7 +46,7 @@ Owner's selected Overflow Adapter in one small state file.
 uv sync
 cp .env.example .env      # fill in a test bot's token and OWNER_ID
 uv run pre-commit install
-uv run python -m twitter_dl
+uv run python -m clipivore
 ```
 
 The same checks CI runs:
@@ -60,14 +60,14 @@ uv run mypy src tests
 
 ### Adding an Overflow Adapter
 
-Drop one module into `src/twitter_dl/adapters/` holding exactly one concrete
+Drop one module into `src/clipivore/adapters/` holding exactly one concrete
 subclass of the fixed interface — the file name is the Adapter's stable id,
 the `label` class attribute is its Menu name:
 
 ```python
 from pathlib import Path
 
-from twitter_dl.services.overflow import OverflowDestination
+from clipivore.services.overflow import OverflowDestination
 
 
 class MyDestination(OverflowDestination):
@@ -134,9 +134,13 @@ is only ever exercised by a person. With a test token:
 
 The bot lives as the third tenant of the `bots` jail on the home FreeBSD server
 (user `twitterdl`, rc.d script `twitter_dl`, env file
-`/usr/local/etc/twitter-dl.env`). Deployment is `ansible-pull` on a `vX.Y.Z`
-tag with a green `ci` check; the details and the one-time bootstrap are in
-[docs/DEPLOY.md](docs/DEPLOY.md).
+`/usr/local/etc/twitter-dl.env`). Those names are older than the bot's own:
+they were left behind by the rename to `clipivore` because they were created by
+hand on a host reachable only through `ansible-pull`. Renaming them is a
+sit-down at the server, written out in
+[docs/SERVER-RENAME.md](docs/SERVER-RENAME.md). Deployment is `ansible-pull` on
+a `vX.Y.Z` tag with a green `ci` check; the details and the one-time bootstrap
+are in [docs/DEPLOY.md](docs/DEPLOY.md).
 
 Cookies expire — that is the normal course of things. The bot notices by itself
 and tells the owner once per exported session: re-export `cookies.txt` from the
