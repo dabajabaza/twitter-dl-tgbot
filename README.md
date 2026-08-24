@@ -80,8 +80,10 @@ helpers and are not scanned. Menu discovers the Adapter at startup — there is
 nothing to register.
 
 A module that fails to import or construct marks only that Adapter
-unavailable, under its own label. It does not prevent the bot or Chat delivery
-from starting.
+unavailable — a failed construction is reported under its own class label, a
+failed import under a name derived from its file (the class never came to
+exist). A subdirectory in the package is refused visibly as misconfigured.
+None of it prevents the bot or Chat delivery from starting.
 
 `requirements.txt` is generated from `uv.lock` and must agree with it (the
 server has no `uv`; it installs with pip):

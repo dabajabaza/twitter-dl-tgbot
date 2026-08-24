@@ -281,14 +281,29 @@ def _discover(package: str) -> dict[str, OverflowChoice]:
     A module IS an Adapter: its file name is the stable id and its one
     concrete ``OverflowDestination`` subclass is the implementation. Modules
     whose names start with an underscore are shared helpers, not Adapters.
+    A subdirectory is not an Adapter either — but unlike a helper it is
+    almost certainly a mistake, so it shows up as misconfigured rather than
+    silently not existing.
     """
     location = importlib.import_module(package)
-    ids = sorted(
-        info.name
-        for info in pkgutil.iter_modules(location.__path__)
-        if not info.name.startswith("_") and not info.ispkg
+    entries = sorted(
+        (info for info in pkgutil.iter_modules(location.__path__)),
+        key=lambda info: info.name,
     )
-    return {adapter_id: _load(adapter_id, f"{package}.{adapter_id}") for adapter_id in ids}
+    choices: dict[str, OverflowChoice] = {}
+    for info in entries:
+        if info.name.startswith("_"):
+            continue
+        if info.ispkg:
+            choices[info.name] = _broken(
+                info.name,
+                _label_from_id(info.name),
+                OverflowState.MISCONFIGURED,
+                "an Adapter is a single module, not a package",
+            )
+            continue
+        choices[info.name] = _load(info.name, f"{package}.{info.name}")
+    return choices
 
 
 def _load(adapter_id: str, module_name: str) -> OverflowChoice:
