@@ -183,8 +183,11 @@ chain is only ever exercised by a person. With a test token:
    and the message stays.
 10. Remove or break the selected Adapter → small clips still arrive, and a large
    one names the missing or misconfigured Overflow destination.
-11. Point `COOKIES_FILE` at a directory → the bot still starts, `/help` lists X
-   as unavailable, and an X link is refused by name while everything else works.
+11. Point `COOKIES_FILE` at a directory → X is reported misconfigured in the
+   log. With X the only Provider installed that is every Provider, so the bot
+   refuses to start at all rather than idling healthily; with a second Provider
+   present it starts, `/help` lists X as unavailable, and an X link is refused
+   by name while the other platform keeps working.
 12. A valid but stale `COOKIES_FILE` plus an NSFW post → one alert to the owner
    naming the Provider, a polite refusal to whoever asked.
 13. Proxy switched off for a minute → "Can't reach X right now", and the bot

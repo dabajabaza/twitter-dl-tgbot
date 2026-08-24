@@ -49,6 +49,21 @@ class TestWhatCountsAsAProvider:
         assert packaged.state is ProviderState.MISCONFIGURED
         assert "single module" in packaged.error
 
+    def test_a_bare_directory_is_reported_too_not_silently_skipped(self) -> None:
+        # The likelier mistake of the two: a folder started for a Provider and
+        # never given an __init__.py. The module scanner does not report it at
+        # all, so without a directory walk of its own it is not a broken
+        # Provider — it is nothing, with not one line in the log to say so.
+        stray = catalog().get("stray_directory")
+        assert stray is not None
+        assert stray.state is ProviderState.MISCONFIGURED
+        assert "not a directory" in stray.error
+
+    def test_the_pycache_the_test_run_itself_leaves_behind_is_not_a_provider(self) -> None:
+        # Underscore-prefixed directories are skipped, which is what keeps
+        # __pycache__ from being announced as somebody's broken Provider.
+        assert catalog().get("__pycache__") is None
+
     def test_a_lookalike_that_subclasses_nothing_is_not_discovered(self) -> None:
         duck = catalog().get("duck")
         assert duck is not None

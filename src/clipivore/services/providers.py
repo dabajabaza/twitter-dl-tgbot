@@ -24,8 +24,10 @@ import logging
 import pkgutil
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import ClassVar
 
 from clipivore.domain import Downloader
@@ -260,7 +262,11 @@ class ProviderCatalog:
                     continue
                 for match in pattern.finditer(source):
                     matches.append((match.start(), -match.end(), order, choice))
-        matches.sort()
+        # Sorted on the numbers alone: a ProviderChoice left in the sort key
+        # would be compared whenever two matches tied, and it has no ordering.
+        # Nothing ties today — the order index is unique per Provider — which is
+        # exactly the kind of invariant that stops being true quietly.
+        matches.sort(key=lambda match: match[:3])
         spans: list[tuple[int, int, ProviderChoice]] = []
         consumed = 0
         for start, negative_end, _order, choice in matches:
@@ -280,9 +286,8 @@ def _discover(package: str, context: ProviderContext) -> dict[str, ProviderChoic
     certainly a mistake, so it shows up as misconfigured rather than as nothing.
     """
     location = importlib.import_module(package)
-    entries = sorted(pkgutil.iter_modules(location.__path__), key=lambda info: info.name)
     choices: dict[str, ProviderChoice] = {}
-    for info in entries:
+    for info in sorted(pkgutil.iter_modules(location.__path__), key=lambda info: info.name):
         if info.name.startswith("_"):
             continue
         if info.ispkg:
@@ -293,7 +298,31 @@ def _discover(package: str, context: ProviderContext) -> dict[str, ProviderChoic
             )
             continue
         choices[info.name] = _load(info.name, f"{package}.{info.name}", context)
-    return choices
+    for name in _stray_directories(location.__path__, seen=set(choices)):
+        choices[name] = _broken(
+            name,
+            _name_from_id(name),
+            "a Provider is a single module, not a directory",
+        )
+    return dict(sorted(choices.items()))
+
+
+def _stray_directories(paths: Iterable[str], *, seen: set[str]) -> list[str]:
+    """Directories the module scanner cannot see, so they would vanish silently.
+
+    ``pkgutil.iter_modules`` only reports a directory that is an importable
+    package. A plain folder — which is what somebody makes when they start a
+    Provider and never add ``__init__.py`` — is returned by nothing at all, so
+    without this it is not a broken Provider, it is no Provider, with not one
+    line in the log to say so.
+    """
+    stray: list[str] = []
+    for path in paths:
+        for entry in Path(path).iterdir():
+            if not entry.is_dir() or entry.name.startswith("_") or entry.name in seen:
+                continue
+            stray.append(entry.name)
+    return sorted(stray)
 
 
 def _load(provider_id: str, module_name: str, context: ProviderContext) -> ProviderChoice:

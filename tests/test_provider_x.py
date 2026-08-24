@@ -5,12 +5,13 @@ exception: the guard under test is "the bot never even asks".
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
 from clipivore.errors import NotAPostLink
 from clipivore.providers.x import _ALLOWED_HOSTS, XProvider
-from clipivore.services.providers import ProviderCatalog, ProviderContext
+from clipivore.services.providers import ProviderCatalog, ProviderContext, ProviderState
 from clipivore.services.redirects import follow
 
 CATALOG = ProviderCatalog(ProviderContext())
@@ -315,3 +316,32 @@ class TestShortLinkResolution:
 
         with pytest.raises(NotAPostLink):
             await resolve_short_link("https://t.co/AbC123")
+
+
+class TestXsOwnConfiguration:
+    def test_a_cookies_path_that_is_a_directory_disables_x_rather_than_the_bot(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # yt-dlp would try to read cookies out of a directory on every single
+        # download. Before Providers this refused to start at all; now it is X
+        # that is unavailable, named as such, while anything else keeps working.
+        monkeypatch.setenv("COOKIES_FILE", str(tmp_path))
+        catalog = ProviderCatalog(ProviderContext())
+
+        x = catalog.get("x")
+        assert x is not None
+        assert x.state is ProviderState.MISCONFIGURED
+        assert "must be a file" in x.error
+        # Still recognises its own links, so the refusal can name X.
+        assert x.claims(TWEET)
+
+    def test_an_empty_cookies_setting_means_no_session_not_the_current_directory(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # `.env.example` invites `NAME=` for optional settings, and an empty
+        # string becomes Path('.') — a directory, i.e. the case above.
+        monkeypatch.setenv("COOKIES_FILE", "   ")
+        provider = XProvider(ProviderContext())
+
+        assert provider.cookies is not None
+        assert provider.cookies.source is None
