@@ -5,6 +5,7 @@ scanner is exercised against real imports rather than against a mock of itself.
 """
 
 import re
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +15,7 @@ from clipivore.services.providers import (
     ProviderCatalog,
     ProviderContext,
     ProviderState,
+    _stray_directories,
 )
 from tests.helpers.fake_providers.good import GoodProvider
 
@@ -63,6 +65,18 @@ class TestWhatCountsAsAProvider:
         # Underscore-prefixed directories are skipped, which is what keeps
         # __pycache__ from being announced as somebody's broken Provider.
         assert catalog().get("__pycache__") is None
+
+    def test_a_tools_cache_directory_is_not_announced_as_a_broken_provider(
+        self, tmp_path: Path
+    ) -> None:
+        # Dot-prefixed too: a stray .mypy_cache or .idea in the package is not
+        # somebody's half-written Provider, and reporting it points at nothing.
+        assert _stray_directories([str(tmp_path)], seen=set()) == []
+        (tmp_path / ".mypy_cache").mkdir()
+        (tmp_path / "_helpers").mkdir()
+        (tmp_path / "half_written").mkdir()
+
+        assert _stray_directories([str(tmp_path)], seen=set()) == ["half_written"]
 
     def test_a_lookalike_that_subclasses_nothing_is_not_discovered(self) -> None:
         duck = catalog().get("duck")
