@@ -73,12 +73,12 @@ class ProgressReporter:
         if self._flusher is None or self._flusher.done():
             self._flusher = asyncio.create_task(self._flush())
 
-    async def finish(self, text: str) -> None:
+    async def finish(self, text: str, *, parse_mode: str | None = None) -> None:
         """Leave ``text`` as the request's last word and stop updating for good."""
         if self._closed:
             return
         await self.close()
-        await self._edit(text)
+        await self._edit(text, parse_mode=parse_mode)
 
     async def replace_with_upload(self) -> None:
         """Drop the status message, because the video itself now stands in its place."""
@@ -127,7 +127,7 @@ class ProgressReporter:
             if text is not None and not self._closed:
                 await self._edit(text)
 
-    async def _edit(self, text: str) -> None:
+    async def _edit(self, text: str, *, parse_mode: str | None = None) -> None:
         if text == self._shown:
             return
         async with self._edit_lock:
@@ -135,7 +135,10 @@ class ProgressReporter:
                 return
             try:
                 await self._bot.edit_message_text(
-                    chat_id=self._chat_id, message_id=self._message_id, text=text
+                    chat_id=self._chat_id,
+                    message_id=self._message_id,
+                    text=text,
+                    parse_mode=parse_mode,
                 )
             except Exception as exc:
                 # Deliberately every exception, not just TelegramAPIError:

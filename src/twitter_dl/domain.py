@@ -23,3 +23,7 @@ class Clip:
     tweet_id: str
     uploader: str
     upload_date: date
+    # The tweet's own text, plain, with the trailing t.co media pointer stripped.
+    description: str = ""
+    # The author's profile link, for the delivery caption's footer.
+    uploader_url: str = ""

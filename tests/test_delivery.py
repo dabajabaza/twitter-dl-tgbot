@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from aiogram.enums import ParseMode
 from aiogram.methods import SendVideo
 
 from tests.helpers.bot_harness import BotHarness
@@ -13,7 +14,6 @@ from twitter_dl.services.delivery import (
     ChatDelivery,
     ClipDelivery,
     OverflowDelivery,
-    _fit_caption,
     overflow_name,
 )
 from twitter_dl.services.overflow import OverflowChoice, OverflowDestination, OverflowState
@@ -76,6 +76,7 @@ async def test_a_clip_within_the_limit_ignores_overflow_and_goes_to_the_chat(
     sent = harness.session.calls_of(SendVideo)
     assert len(sent) == 1
     assert sent[0].caption == "https://x.com/a/status/1"
+    assert sent[0].parse_mode == ParseMode.HTML
     assert sent[0].chat_id == 42
 
 
@@ -212,24 +213,9 @@ class TestOverflowName:
         assert "/" not in name and ".." not in name
 
 
+# The caption-length guarantee lives upstream now: bot/captions.build_caption
+# fits the text before the caption ever reaches deliver() (tests/test_captions.py).
 class TestUploadDetails:
-    async def test_an_overlong_caption_does_not_cost_a_downloaded_clip(
-        self, harness: BotHarness, tmp_path: Path
-    ) -> None:
-        clip = make_clip(tmp_path, size_bytes=1024)
-        caption = "https://x.com/a/status/1?ref=" + "z" * 2000
-
-        await build_delivery(harness).deliver(
-            clip,
-            chat_id=42,
-            caption=caption,
-            overflow=OFF,
-        )
-
-        sent = harness.session.calls_of(SendVideo)[0]
-        assert sent.caption is not None
-        assert len(sent.caption) <= 1024
-
     async def test_uploads_get_their_own_generous_timeout(
         self, harness: BotHarness, tmp_path: Path
     ) -> None:
@@ -243,21 +229,3 @@ class TestUploadDetails:
         )
 
         assert harness.session.timeout_of(SendVideo) == 600
-
-
-class TestCaptionLength:
-    def test_a_plain_caption_is_left_alone(self) -> None:
-        assert _fit_caption("https://x.com/a/status/1") == "https://x.com/a/status/1"
-
-    def test_an_emoji_heavy_caption_is_measured_the_way_telegram_measures_it(self) -> None:
-        fitted = _fit_caption("😀" * 600)
-        assert len(fitted.encode("utf-16-le")) // 2 <= 1024
-
-    def test_trimming_never_splits_a_surrogate_pair(self) -> None:
-        fitted = _fit_caption("😀" * 600)
-        assert fitted.encode("utf-16-le").decode("utf-16-le") == fitted
-
-    def test_a_long_ascii_caption_is_trimmed_to_the_limit(self) -> None:
-        fitted = _fit_caption("z" * 5000)
-        assert len(fitted) <= 1024
-        assert fitted.endswith("…")

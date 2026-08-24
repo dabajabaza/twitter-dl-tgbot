@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 
 from aiogram import Bot
+from aiogram.enums import ParseMode
 from aiogram.types import FSInputFile
 
 from twitter_dl.domain import Clip
@@ -16,8 +17,6 @@ logger = logging.getLogger(__name__)
 # Uploading tens of megabytes through the proxy takes far longer than a normal
 # API call, so this overrides the session-wide request timeout for that one call.
 _UPLOAD_TIMEOUT_S = 600
-# Bot API ceiling for a media caption, which aiogram does not enforce itself.
-_CAPTION_LIMIT = 1024
 # Dots are excluded along with the obvious separators: the metadata comes from
 # X by way of yt-dlp, and a handle of "../.." must not be able to say anything
 # about a path once it is pasted after the remote's name.
@@ -66,12 +65,16 @@ class ClipDelivery:
         index: int = 1,
         total: int = 1,
     ) -> DeliveryResult:
+        # The caption arrives as ready-to-send HTML, already escaped and fitted
+        # by bot/captions.build_caption — a naive trim here would cut a tag in
+        # half, so it goes out verbatim.
         size = clip.path.stat().st_size
         if size <= self._max_chat_bytes:
             await self._bot.send_video(
                 chat_id=chat_id,
                 video=FSInputFile(clip.path),
-                caption=_fit_caption(caption),
+                caption=caption,
+                parse_mode=ParseMode.HTML,
                 supports_streaming=True,
                 request_timeout=_UPLOAD_TIMEOUT_S,
             )
@@ -98,34 +101,6 @@ class ClipDelivery:
             adapter_label=overflow.label,
             location=location,
         )
-
-
-def _utf16_length(text: str) -> int:
-    """Length as Telegram counts it: UTF-16 code units, not code points.
-
-    Anything outside the basic plane — an emoji, most notably — is two units to
-    Telegram and one character to Python, so counting characters lets a caption
-    Telegram considers too long slip through.
-    """
-    return len(text.encode("utf-16-le")) // 2
-
-
-def _fit_caption(caption: str) -> str:
-    """Keep the caption inside the Bot API's limit.
-
-    aiogram does not check the length, so an over-long one comes back as a 400
-    and loses a clip that downloaded perfectly well — and tweet URLs carry
-    arbitrarily long tracking tails.
-    """
-    if _utf16_length(caption) <= _CAPTION_LIMIT:
-        return caption
-    # Trimmed one character at a time from the end rather than sliced by index:
-    # a slice at a fixed offset can land between the halves of a surrogate pair
-    # and produce a caption Telegram rejects outright.
-    kept = caption
-    while kept and _utf16_length(kept) > _CAPTION_LIMIT - 1:
-        kept = kept[:-1]
-    return kept + "…"
 
 
 def overflow_name(clip: Clip, *, index: int = 1, total: int = 1) -> str:

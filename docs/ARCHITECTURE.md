@@ -172,7 +172,8 @@ Tweets from Premium accounts can run for an hour. Standing up a local Bot API
 server (a 2 GB limit) means another daemon on an old laptop for a rare case.
 
 **Decision.** A clip under the ceiling goes to the chat, captioned with the
-tweet's link. A clip over it goes through the `OverflowDestination` Adapter the
+tweet's text and a footer linking the author's profile and the tweet itself
+(D17). A clip over it goes through the `OverflowDestination` Adapter the
 Owner selected for the whole bot. The built-ins are an rclone-backed SMB Share
 and Yandex Disk with a public link; `none` disables Overflow delivery. The
 selection is captured when a Request enters the queue, so changing Menu cannot
@@ -269,13 +270,18 @@ downloaded this tweet" deduplication becomes necessary.
 **Context.** Replies quote things that do not belong to the bot: account
 handles, yt-dlp messages, Windows paths full of backslashes.
 
-**Decision.** No HTML or Markdown parse mode. Every bot-owned string lives in
-`bot/texts.py`, in English. Adapter labels and returned locators belong to the
-Adapter that supplies them.
+**Decision.** No HTML or Markdown parse mode — everywhere except the delivery
+verdict (the video caption and the Overflow result), whose HTML is confined to
+`bot/captions.py` (D17). Every bot-owned string lives in `bot/texts.py`, in
+English and plain. Adapter labels and returned locators belong to the Adapter
+that supplies them.
 
-**Consequences.** There is nothing to escape and no markup to break. There is no
-bold text, and the UX does not suffer for it. The rule is enforced by a test
-(`test_texts.py`): Cyrillic in a string fails the build.
+**Consequences.** Outside the delivery verdict there is nothing to escape and no
+markup to break; inside it, every foreign string — the tweet's text, the handle,
+the locator — passes through `html.escape`, and fitting happens *before*
+escaping so a trim cannot cut an entity in half. The plain-text rule is enforced
+by a test (`test_texts.py`): markup or Cyrillic in a `texts.py` string fails the
+build.
 
 ---
 
@@ -410,3 +416,43 @@ than cancellation, sends the process SIGTERM — let the supervisor restart it.
 **Consequences.** A transient 502 can no longer quietly behead the bot; and if
 the worker does end for some unforeseen reason, it shows up as a restart rather
 than as silence. Both layers are covered by tests.
+
+---
+
+## D17. A delivered Request cleans up after itself
+
+**Context.** The user's message with the link and the bot's reply both stay in
+the chat, so every download leaves two messages where one would do. The raw URL
+as a caption says nothing about what the video is.
+
+**Decision.** The caption is the tweet's text, a blank line, then a footer:
+`@handle · Open in X`, where the handle links to the author's profile and the
+label links to the tweet. The HTML lives in `bot/captions.py` — the one module
+allowed to emit markup (D10). Telegram counts the 1024-unit caption limit on the
+*rendered* text in UTF-16 code units, markup excluded, so the budget for the
+tweet's text is 1024 minus the rendered footer minus the separator; the footer
+is appended after fitting and is never truncated. The trailing `t.co` pointer X
+appends to its own media is stripped from the text (`services/downloader.py`);
+one in mid-sentence is the author's words and stays.
+
+Once everything a user's message asked for arrived, the message itself is
+deleted. One message can hold several links, so the handler creates one
+`SourceMessage` per message (`runtime/worker.py`) with the link count fixed
+before its first await; the worker resolves every Request exactly once from a
+`finally`, and the deletion fires only when all of them succeeded. Any failure —
+a typed verdict, a timeout, an unexpected crash, a link refused by a full
+queue — taints the batch and the message survives, so the person keeps the link
+to retry. Deletion failures are cosmetic, like the status-message delete: a bot
+cannot delete messages older than 48 hours.
+
+The Overflow verdict carries the same tweet text and footer after the locator
+blocks — precisely because the original message is deleted on success, the
+verdict is then the only place the link survives. The locator and adapter label
+are escaped: under an HTML parse mode, foreign text must not parse as markup.
+
+**Consequences.** A chat holds one message per video, captioned with what the
+video actually is. `ClipDelivery` sends the caption verbatim — it arrives
+already escaped and fitted, and a naive trim there would cut a tag in half.
+
+**Revisit when** Telegram changes the caption limit, or a locator longer than
+the 4096-character message budget appears.

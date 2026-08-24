@@ -40,6 +40,12 @@ logger = logging.getLogger(__name__)
 # video, captioned with the tweet and filed externally under their name.
 _ALLOWED_EXTRACTORS = ["twitter.*"]
 
+# X appends a t.co pointer to the tweet's own media at the end of the text; in
+# a caption that link only duplicates the one the footer already carries. Both
+# schemes occur in the wild. Only a *trailing* run is stripped — a t.co in the
+# middle of a sentence is part of what the author said.
+_TRAILING_TCO = re.compile(r"(?:\s*https?://t\.co/[A-Za-z0-9]+)+\s*$")
+
 # yt-dlp appends a generic "how to pass cookies" hint to *every* login-required
 # error. That hint alone contains the words that otherwise mean "our session was
 # rejected", so it is cut off before anything is matched — otherwise a protected
@@ -354,7 +360,23 @@ def _clip_from_entry(entry: dict[str, Any], url: str) -> Clip | None:
         tweet_id=_tweet_id(entry),
         uploader=str(entry.get("uploader_id") or entry.get("uploader") or "unknown"),
         upload_date=_upload_date(entry),
+        description=_description(entry),
+        uploader_url=_uploader_url(entry),
     )
+
+
+def _description(entry: dict[str, Any]) -> str:
+    """The tweet's text, without the t.co pointer X appends for the media."""
+    raw = str(entry.get("description") or "")
+    return _TRAILING_TCO.sub("", raw).strip()
+
+
+def _uploader_url(entry: dict[str, Any]) -> str:
+    url = entry.get("uploader_url")
+    if url:
+        return str(url)
+    handle = entry.get("uploader_id")
+    return f"https://x.com/{handle}" if handle else ""
 
 
 def _tweet_id(entry: dict[str, Any]) -> str:
