@@ -6,6 +6,7 @@ from aiogram.methods import DeleteMessage, EditMessageText, SendMessage
 
 from clipivore.bot import texts
 from clipivore.services.overflow import OverflowCatalog
+from clipivore.services.providers import ProviderCatalog, ProviderContext
 from tests.helpers.bot_harness import BotHarness
 from tests.helpers.factories import OWNER_ID
 
@@ -123,3 +124,51 @@ async def test_a_message_without_links_says_so(harness: BotHarness) -> None:
 
     assert harness.session.sent_texts() == [texts.NO_LINK]
     assert harness.queue.load == 0
+
+
+async def test_help_lists_what_the_bot_can_be_sent(harness: BotHarness) -> None:
+    # The /help text is generated from the discovered Providers, so adding one
+    # cannot leave the help behind.
+    await harness.send("/help", user_id=OWNER_ID)
+
+    help_text = harness.session.sent_texts()[0]
+    for choice in harness.provider_catalog.ready:
+        assert choice.name in help_text
+
+
+async def test_a_link_claimed_by_a_broken_provider_is_refused_by_name(
+    harness: BotHarness,
+) -> None:
+    # Silence is what an unknown link gets. A platform the bot knows about but
+    # cannot serve owes the person an explanation instead — and must not spend
+    # a queue slot on it.
+    harness.dp["provider_catalog"] = ProviderCatalog(
+        ProviderContext(), package="tests.helpers.fake_providers"
+    )
+
+    await harness.send("https://broken.example/1", user_id=OWNER_ID)
+
+    assert harness.queue.load == 0
+    assert any("Broken" in text for text in edited_texts(harness))
+    # The user's message survives, so the link can be retried after a fix.
+    assert not harness.session.calls_of(DeleteMessage)
+
+
+async def test_a_working_provider_in_the_same_message_is_still_queued(
+    harness: BotHarness,
+) -> None:
+    harness.dp["provider_catalog"] = ProviderCatalog(
+        ProviderContext(), package="tests.helpers.fake_providers"
+    )
+
+    await harness.send("https://broken.example/1 https://good.example/2", user_id=OWNER_ID)
+
+    assert harness.queue.load == 1
+
+
+def edited_texts(harness: BotHarness) -> list[str]:
+    return [
+        text
+        for method in harness.session.calls_of(EditMessageText)
+        if (text := getattr(method, "text", None))
+    ]

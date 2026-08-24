@@ -28,10 +28,10 @@ from clipivore.bot.storage import NoStorage
 from clipivore.config import Settings
 from clipivore.runtime.watchdog import run_watchdog, sd_notify
 from clipivore.runtime.worker import OwnerAlerts, RequestQueue, RequestWorker
-from clipivore.services.cookies import CookieSession
 from clipivore.services.delivery import ClipDelivery
-from clipivore.services.downloader import YtDlpDownloader, ffmpeg_available
+from clipivore.services.downloader import ffmpeg_available
 from clipivore.services.overflow import OverflowCatalog
+from clipivore.services.providers import ProviderCatalog, ProviderContext
 
 logger = logging.getLogger("clipivore")
 
@@ -66,6 +66,7 @@ def build_dispatcher(
     settings: Settings,
     queue: RequestQueue,
     overflow_catalog: OverflowCatalog,
+    provider_catalog: ProviderCatalog,
 ) -> Dispatcher:
     """Wire the dispatcher in the one order that matters.
 
@@ -84,6 +85,7 @@ def build_dispatcher(
     dp["settings"] = settings
     dp["queue"] = queue
     dp["overflow_catalog"] = overflow_catalog
+    dp["provider_catalog"] = provider_catalog
 
     # Both gates are outer middlewares on `update`, before any filter runs: a
     # stranger's message must not even be pattern-matched, let alone answered.
@@ -197,18 +199,18 @@ async def _run_bot(settings: Settings) -> None:
 
     queue = RequestQueue(settings.queue_limit)
     overflow_catalog = OverflowCatalog(state_file=settings.overflow_state_file)
-    cookies = CookieSession(settings.cookies_file)
+    provider_catalog = ProviderCatalog(ProviderContext(proxy=settings.ytdlp_proxy))
+    _log_providers(provider_catalog)
     worker = RequestWorker(
         queue=queue,
-        downloader=YtDlpDownloader(cookies=cookies, proxy=settings.ytdlp_proxy),
         delivery=ClipDelivery(
             bot,
             max_chat_bytes=settings.max_tg_video_bytes,
         ),
-        alerts=OwnerAlerts(bot, owner_id=settings.owner_id, cookies=cookies),
+        alerts=OwnerAlerts(bot, owner_id=settings.owner_id),
         settings=settings,
     )
-    dp = build_dispatcher(settings, queue, overflow_catalog)
+    dp = build_dispatcher(settings, queue, overflow_catalog, provider_catalog)
 
     me = await _establish_connection(bot)
     await _set_commands(bot, owner_id=settings.owner_id)
@@ -248,6 +250,16 @@ async def _run_bot(settings: Settings) -> None:
         # turns a clean shutdown into a traceback.
         await asyncio.gather(worker_task, watchdog_task, return_exceptions=True)
         await bot.session.close()
+
+
+def _log_providers(catalog: ProviderCatalog) -> None:
+    """Say what the bot can download from, at the one moment somebody reads the log.
+
+    A Provider whose module failed to import cannot claim its own links, so this
+    line is the only place that breakage is visible at all.
+    """
+    ready = [choice.name for choice in catalog.ready]
+    logger.info("providers ready: %s", ", ".join(ready) if ready else "none")
 
 
 def _worker_died(task: asyncio.Task[None]) -> None:

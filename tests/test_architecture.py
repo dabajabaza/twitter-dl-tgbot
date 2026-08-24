@@ -12,6 +12,7 @@ from clipivore.__main__ import build_dispatcher
 from clipivore.bot.handlers import fallback, links, overflow, start
 from clipivore.runtime.worker import RequestQueue
 from clipivore.services.overflow import OverflowCatalog
+from clipivore.services.providers import ProviderCatalog
 from tests.helpers.factories import build_settings
 
 SRC = Path(clipivore.__file__).parent
@@ -43,6 +44,13 @@ def test_only_the_download_engine_knows_about_yt_dlp() -> None:
     # The rule that keeps the engine replaceable and the worker testable: every
     # other module speaks in `domain.Clip`, so swapping yt-dlp out is one file.
     assert _importers_of("yt_dlp") == {"services/downloader.py"}
+
+
+def test_the_provider_mechanism_names_neither_an_engine_nor_a_chat_framework() -> None:
+    # It is the seam between them: the day a Provider needs an engine that is
+    # not yt-dlp (Threads has no extractor at all), this file must not care.
+    machinery = _modules()["services/providers.py"]
+    assert not {"yt_dlp", "aiogram"} & _imports(machinery)
 
 
 def test_only_the_presentation_layer_knows_about_aiogram() -> None:
@@ -82,7 +90,7 @@ def test_the_catch_all_router_is_registered_last(tmp_path: Path) -> None:
     # dead code — and the failure would be silent.
     settings = build_settings(tmp_path)
     catalog = OverflowCatalog("tests.helpers.no_adapters", state_file=settings.overflow_state_file)
-    dp = build_dispatcher(settings, RequestQueue(settings.queue_limit), catalog)
+    dp = build_dispatcher(settings, RequestQueue(settings.queue_limit), catalog, ProviderCatalog())
     try:
         assert dp.sub_routers[-1] is fallback.router
     finally:

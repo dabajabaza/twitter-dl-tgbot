@@ -33,8 +33,17 @@ def test_nothing_is_formatted_as_html_or_markdown() -> None:
 
 def test_every_placeholder_is_one_the_caller_actually_supplies() -> None:
     supplied = {
-        "HELP": {"max_mb", "overflow"},
+        "HELP": {"max_mb", "overflow", "providers"},
         "HELP_OVERFLOW_READY": {"adapter"},
+        # Every string that names a platform takes it as a placeholder rather
+        # than spelling it: one inventory serves every Provider.
+        "HELP_PROVIDER": {"provider", "hint"},
+        "HELP_PROVIDER_BROKEN": {"provider"},
+        "NOT_A_POST": {"provider"},
+        "PROVIDER_MISCONFIGURED": {"provider"},
+        "OPEN_IN": {"provider"},
+        "NETWORK_UNAVAILABLE": {"provider"},
+        "AUTH_EXPIRED": {"provider"},
         "QUEUE_FULL": {"limit"},
         "QUEUED_POSITION": {"position"},
         "DOWNLOADING_PROGRESS": {"progress"},
@@ -54,7 +63,7 @@ def test_every_placeholder_is_one_the_caller_actually_supplies() -> None:
         "OVERFLOW_MENU_PROBLEMS": {"problems"},
         "OVERFLOW_SELECTED": {"adapter"},
         "TIMED_OUT": {"minutes"},
-        "OWNER_AUTH_EXPIRED": {"path", "detail"},
+        "OWNER_AUTH_EXPIRED": {"provider", "path", "detail"},
     }
     for name, value in _PUBLIC.items():
         placeholders = set(re.findall(r"\{(\w+)\}", value))

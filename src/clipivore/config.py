@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
         alias="OWNER_ID",
         description=(
             "Telegram user id of the owner: always allowed, and the only recipient of "
-            "operational alerts such as expired X cookies"
+            "operational alerts such as an expired cookie session"
         ),
     )
     # Kept as a raw string and parsed via the property below: pydantic-settings tries
@@ -52,14 +52,8 @@ class Settings(BaseSettings):
     ytdlp_proxy_raw: str | None = Field(
         default=None,
         alias="YTDLP_PROXY",
-        description="Proxy URL for reaching X; falls back to TELEGRAM_PROXY when unset",
-    )
-    cookies_file: Path | None = Field(
-        default=None,
-        alias="COOKIES_FILE",
         description=(
-            "Netscape-format cookies.txt of the owner's X session. Without it only public "
-            "tweets download: no NSFW, no age-gated, no protected accounts"
+            "Proxy URL for reaching the video Providers; falls back to TELEGRAM_PROXY when unset"
         ),
     )
     download_dir: Path = Field(
@@ -86,20 +80,6 @@ class Settings(BaseSettings):
         ),
     )
 
-    @field_validator("cookies_file", mode="before")
-    @classmethod
-    def _empty_path_means_unset(cls, value: object) -> object:
-        """An empty value is "not configured", not the current directory.
-
-        `.env.example` invites `NAME=` for optional settings, and pydantic turns
-        an empty string into `Path('.')` for a `Path | None` field. That start
-        succeeds and then fails on every single download, with yt-dlp trying to
-        read cookies out of a directory.
-        """
-        if isinstance(value, str) and not value.strip():
-            return None
-        return value
-
     @property
     def allowed_ids(self) -> frozenset[int]:
         """The whitelist: ALLOWED_IDS plus the owner, who can never lock themselves out."""
@@ -113,7 +93,7 @@ class Settings(BaseSettings):
 
     @property
     def ytdlp_proxy(self) -> str | None:
-        """Proxy for X, defaulting to the Telegram one — they are the same hop here."""
+        """Proxy for the Providers, defaulting to the Telegram one — same hop here."""
         return self.ytdlp_proxy_raw or self.telegram_proxy
 
     @property
@@ -130,16 +110,14 @@ class Settings(BaseSettings):
     def _fail_fast_on_derived_values(self) -> "Settings":
         """Parse and range-check core settings that cannot be degraded safely.
 
-        Optional Overflow Adapter errors are deliberately handled by its catalog
-        instead; they must not take Chat delivery down with them.
+        Optional Overflow Adapter and Provider errors are deliberately handled by
+        their own catalogs instead; they must not take the whole bot down.
         """
         _ = self.allowed_ids
         if self.queue_limit < 1:
             raise ValueError(f"QUEUE_LIMIT must be >= 1, got {self.queue_limit}")
         if self.download_timeout_s < 1:
             raise ValueError(f"DOWNLOAD_TIMEOUT_S must be >= 1, got {self.download_timeout_s}")
-        if self.cookies_file is not None and self.cookies_file.is_dir():
-            raise ValueError(f"COOKIES_FILE must be a file, got directory {self.cookies_file}")
         if self.max_tg_video_mb < 1:
             raise ValueError(f"MAX_TG_VIDEO_MB must be >= 1, got {self.max_tg_video_mb}")
         return self

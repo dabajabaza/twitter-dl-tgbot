@@ -1,4 +1,4 @@
-"""Accepting tweet links. There is no command to remember — a link is the command."""
+"""Accepting post links. There is no command to remember — a link is the command."""
 
 import asyncio
 import logging
@@ -13,24 +13,28 @@ from clipivore.bot import texts
 from clipivore.bot.progress import ProgressReporter
 from clipivore.config import Settings
 from clipivore.runtime.worker import Request, RequestQueue, SourceMessage
-from clipivore.services.links import extract_links
 from clipivore.services.overflow import OverflowCatalog
+from clipivore.services.providers import ClaimedLink, ProviderCatalog
 
 logger = logging.getLogger(__name__)
 
 router = Router(name="links")
 
 
-class HasTweetLinks(Filter):
-    """Matches a message carrying at least one tweet link, and hands them over.
+class HasPostLinks(Filter):
+    """Matches a message carrying at least one link some Provider claims.
 
     Returning a dict merges it into the handler's arguments, so the links are
-    extracted once here rather than again inside the handler.
+    extracted once here rather than again inside the handler. The catalog is
+    declared as a parameter, which aiogram fills from the dispatcher's workflow
+    data — the same singleton the handlers get.
     """
 
-    async def __call__(self, message: Message) -> bool | dict[str, Any]:
-        urls = extract_links(message.text, message.caption, *_hidden_urls(message))
-        return {"urls": urls} if urls else False
+    async def __call__(
+        self, message: Message, provider_catalog: ProviderCatalog
+    ) -> bool | dict[str, Any]:
+        links = provider_catalog.extract(message.text, message.caption, *_hidden_urls(message))
+        return {"links": links} if links else False
 
 
 def _hidden_urls(message: Message) -> Iterator[str]:
@@ -40,10 +44,10 @@ def _hidden_urls(message: Message) -> Iterator[str]:
             yield entity.url
 
 
-@router.message(HasTweetLinks())
+@router.message(HasPostLinks())
 async def enqueue_links(
     message: Message,
-    urls: list[str],
+    links: list[ClaimedLink],
     bot: Bot,
     queue: RequestQueue,
     settings: Settings,
@@ -56,17 +60,26 @@ async def enqueue_links(
     # Created before the first await: the count must be settled while no
     # request can possibly have finished yet.
     source = SourceMessage(
-        bot, chat_id=message.chat.id, message_id=message.message_id, expected=len(urls)
+        bot, chat_id=message.chat.id, message_id=message.message_id, expected=len(links)
     )
-    for url in urls:
+    for link in links:
         status = await message.answer(texts.QUEUED)
         reporter = ProgressReporter(bot, chat_id=status.chat.id, message_id=status.message_id)
+        if not link.choice.ready:
+            # Claimed by a Provider that could not be built. Refusing here
+            # rather than in the worker keeps a broken platform from spending a
+            # queue slot, and names it instead of ignoring the link.
+            logger.info("refused %s: provider %s is broken", link.url, link.choice.provider_id)
+            source.abandon()
+            await reporter.finish(texts.PROVIDER_MISCONFIGURED.format(provider=link.choice.name))
+            continue
         request = Request(
-            url=url,
+            url=link.url,
             chat_id=message.chat.id,
             user_id=user.id,
             reporter=reporter,
             overflow=overflow_catalog.current,
+            provider=link.choice,
             source=source,
         )
         try:
@@ -80,6 +93,6 @@ async def enqueue_links(
             # queue, and repeating the refusal per link is just noise.
             return
 
-        logger.info("queued %s for %s at position %s", url, user.id, position)
+        logger.info("queued %s for %s at position %s", link.url, user.id, position)
         if position > 1:
             await reporter.set(texts.QUEUED_POSITION.format(position=position))
