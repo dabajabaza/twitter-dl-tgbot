@@ -211,7 +211,7 @@ async def test_a_clip_is_delivered_and_the_status_message_steps_aside(
         build_caption("", TWEET, uploader="someone")
     ]
     # The upload status answers "why is this taking long": it names the size.
-    assert texts.UPLOADING.format(size="0 MB") in edited_texts(harness)
+    assert texts.UPLOADING.format(size="1 KB") in edited_texts(harness)
     # The video itself is the answer, so the progress message is removed.
     assert harness.session.calls_of(DeleteMessage)
 
@@ -300,7 +300,7 @@ async def test_every_clip_of_a_tweet_is_delivered_and_numbered(
         (1, 2),
         (2, 2),
     ]
-    assert texts.UPLOADING_MANY.format(index=1, total=2, size="0 MB") in edited_texts(harness)
+    assert texts.UPLOADING_MANY.format(index=1, total=2, size="1 KB") in edited_texts(harness)
 
 
 async def test_final_size_refusal_delivers_none_of_a_multi_clip_request(

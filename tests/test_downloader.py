@@ -107,6 +107,19 @@ class TestProgress:
         assert progress.stream == "video"
 
     def test_an_audio_only_stream_is_named_audio(self) -> None:
+        # The realistic X shape: an HLS EXT-X-MEDIA audio rendition, for which
+        # yt-dlp sets vcodec="none" but never fills acodec at all. Keying on
+        # acodec would leave every real audio run nameless.
+        status = {
+            "status": "downloading",
+            "downloaded_bytes": 1,
+            "info_dict": {"vcodec": "none", "ext": "mp4"},
+        }
+        progress = module._format_progress(status)
+        assert progress is not None
+        assert progress.stream == "audio"
+
+    def test_an_audio_stream_with_a_known_codec_is_still_audio(self) -> None:
         status = {
             "status": "downloading",
             "downloaded_bytes": 1,
@@ -133,6 +146,28 @@ class TestProgress:
         progress = module._format_progress(status)
         assert progress is not None
         assert progress.stream == ""
+
+    def test_a_sub_megabyte_total_is_reported_in_kilobytes(self) -> None:
+        # The audio stream of a short clip is a few hundred KB; "40% of 0 MB"
+        # would read as a glitch.
+        status = {
+            "status": "downloading",
+            "downloaded_bytes": 80 * 1024,
+            "total_bytes": 200 * 1024,
+        }
+        progress = module._format_progress(status)
+        assert progress is not None
+        assert progress.text == "40% of 200 KB"
+
+    def test_a_gigabyte_total_is_reported_in_gigabytes(self) -> None:
+        status = {
+            "status": "downloading",
+            "downloaded_bytes": 1024 * 1024 * 1024,
+            "total_bytes": 2 * 1024 * 1024 * 1024,
+        }
+        progress = module._format_progress(status)
+        assert progress is not None
+        assert progress.text == "50% of 2.0 GB"
 
 
 class TestDownloadCeiling:
