@@ -1,8 +1,8 @@
 # clipivore-tgbot
 
 A personal Telegram bot: send it a link to a post and get the video from it, at
-the best quality available. X is the platform it was built for; other Providers
-are one file each. Downloads run through `yt-dlp` under the
+the best quality available. X and Bluesky are built in; another Provider is one
+file more. Downloads run through `yt-dlp` under the
 owner's own cookies, so NSFW, age-gated and protected accounts the owner
 follows are all reachable.
 
@@ -173,24 +173,26 @@ chain is only ever exercised by a person. With a test token:
    the link stays.
 4. Text with no links at all → "No link I recognise…".
 5. `/help` → every discovered Provider is listed with its link shapes.
-6. Six links at once → the sixth is refused with "Queue is full".
-7. `MAX_TG_VIDEO_MB=1` with Overflow delivery off → an explicit size-limit
+6. A Bluesky post with a video → the clip arrives, footer reads "Open in
+   Bluesky"; it works with no cookies and no Bluesky settings at all.
+7. Six links at once → the sixth is refused with "Queue is full".
+8. `MAX_TG_VIDEO_MB=1` with Overflow delivery off → an explicit size-limit
    verdict naming how far the download got, and no complete oversized download.
-8. Enable the Share Adapter → the file lands there and the chat gets the path
+9. Enable the Share Adapter → the file lands there and the chat gets the path
    plus the post's text and footer; enable Yandex Disk → the chat gets a
    working public link.
-9. One good link and one dead link in the same message → the good one arrives,
+10. One good link and one dead link in the same message → the good one arrives,
    and the message stays.
-10. Remove or break the selected Adapter → small clips still arrive, and a large
+11. Remove or break the selected Adapter → small clips still arrive, and a large
    one names the missing or misconfigured Overflow destination.
-11. Point `COOKIES_FILE` at a directory → X is reported misconfigured in the
-   log. With X the only Provider installed that is every Provider, so the bot
-   refuses to start at all rather than idling healthily; with a second Provider
-   present it starts, `/help` lists X as unavailable, and an X link is refused
-   by name while the other platform keeps working.
-12. A valid but stale `COOKIES_FILE` plus an NSFW post → one alert to the owner
+12. Point `COOKIES_FILE` at a directory → X is reported misconfigured in the
+   log, the bot starts anyway, `/help` lists X as unavailable, and an X link is
+   refused by name while Bluesky keeps working. Remove the Bluesky module too
+   and the bot refuses to start at all: with no Provider left there is nothing
+   it could do, and idling healthily would hide that.
+13. A valid but stale `COOKIES_FILE` plus an NSFW post → one alert to the owner
    naming the Provider, a polite refusal to whoever asked.
-13. Proxy switched off for a minute → "Can't reach X right now", and the bot
+14. Proxy switched off for a minute → "Can't reach X right now", and the bot
    neither hangs nor dies.
 
 ## Operations
