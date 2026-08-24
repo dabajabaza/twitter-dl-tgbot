@@ -32,8 +32,10 @@ class ShareSettings(RcloneSettings):
 class ShareDestination(OverflowDestination):
     label = "Share"
 
-    def __init__(self, settings: ShareSettings) -> None:
-        self._settings = settings
+    def __init__(self, settings: ShareSettings | None = None) -> None:
+        # Discovery constructs Adapters with no arguments (ADR 0002), so the
+        # default reads SHARE_* from the environment; tests inject their own.
+        self._settings = settings if settings is not None else ShareSettings()
 
     async def store(self, source: Path, *, name: str) -> str:
         await run_rclone(
@@ -45,7 +47,3 @@ class ShareDestination(OverflowDestination):
             f"{self._settings.rclone_remote}/{name}",
         )
         return f"{self._settings.path_prefix}\\{name}"
-
-
-def create() -> ShareDestination:
-    return ShareDestination(ShareSettings())

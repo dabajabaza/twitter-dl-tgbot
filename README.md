@@ -23,8 +23,9 @@ real account, one uplink.
   larger clips is optional: the owner can switch between the configured
   Overflow Adapters from the bot's Menu.
 - Built-in Overflow Adapters cover an SMB Share and Yandex Disk through
-  `rclone`; a deployment may enable neither, either or both. A custom Adapter is
-  one importable `module:create` factory plus its environment configuration.
+  `rclone`; every Adapter found in `src/twitter_dl/adapters/` appears in the
+  Menu automatically, ready or not. A custom Adapter is one module in that
+  package plus its environment configuration.
 - The queue is strictly sequential: there is one uplink, and parallelism would
   only make progress reporting lie.
 - Strangers get silence: the bot does not even confirm that it exists.
@@ -55,7 +56,9 @@ uv run mypy src tests
 
 ### Adding an Overflow Adapter
 
-Create an importable module whose destination inherits the fixed interface:
+Drop one module into `src/twitter_dl/adapters/` holding exactly one concrete
+subclass of the fixed interface — the file name is the Adapter's stable id,
+the `label` class attribute is its Menu name:
 
 ```python
 from pathlib import Path
@@ -66,25 +69,19 @@ from twitter_dl.services.overflow import OverflowDestination
 class MyDestination(OverflowDestination):
     label = "My storage"
 
+    # Constructed with no arguments: read your own MY_STORAGE_* settings here.
     # Store source and return the non-empty locator shown in chat.
     async def store(self, source: Path, *, name: str) -> str: ...
-
-
-def create() -> MyDestination:
-    return MyDestination()
 ```
 
-The module owns and validates its prefixed environment settings, like the
-built-ins under `src/twitter_dl/adapters/`.
+The subclass owns and validates its prefixed environment settings, like the
+built-ins next to it; modules whose names start with an underscore are shared
+helpers and are not scanned. Menu discovers the Adapter at startup — there is
+nothing to register.
 
-Enable the factory with one full import path; Menu discovers it at startup:
-
-```sh
-OVERFLOW_ADAPTERS__MY_STORAGE=my_package.my_adapter:create
-```
-
-A missing factory or invalid settings mark only that Adapter unavailable. They
-do not prevent the bot or Chat delivery from starting.
+A module that fails to import or construct marks only that Adapter
+unavailable, under its own label. It does not prevent the bot or Chat delivery
+from starting.
 
 `requirements.txt` is generated from `uv.lock` and must agree with it (the
 server has no `uv`; it installs with pip):

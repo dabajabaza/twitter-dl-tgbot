@@ -244,8 +244,8 @@ ephemeral, and nobody needs a history of requests.
 
 **Decision.** No database. The sole durable application value is the Owner's
 active Overflow Adapter id, atomically replaced in
-`DOWNLOAD_DIR/.overflow-destination`; if the file does not exist,
-`OVERFLOW_DEFAULT` applies. Queue contents and alert deduplication stay in
+`DOWNLOAD_DIR/.overflow-destination`; if the file does not exist, Overflow
+delivery starts off. Queue contents and alert deduplication stay in
 memory. Recovery from a non-regular state path uses a transient
 `.overflow-destination.recovery` marker, so a crash between quarantine and
 replacement remains visibly misconfigured instead of looking like first startup.
@@ -294,11 +294,11 @@ a database session per request, a unit of work, scope collapsing
 **Decision.** There is no container. The singletons (`Settings`, `Bot`,
 `RequestQueue`, the downloader, the delivery route, and the Overflow catalog)
 are assembled by hand in `__main__._run_bot`; handlers receive them through
-aiogram's workflow data. Each configured `module:create` factory constructs one
-optional `OverflowDestination` Adapter and owns its prefixed environment
-settings. Import or configuration failures become visible catalog states and
-cannot stop Chat delivery or bot startup
-([ADR 0001](adr/0001-configured-overflow-adapters.md)).
+aiogram's workflow data. The Overflow catalog discovers one optional
+`OverflowDestination` Adapter per module of `twitter_dl/adapters/`; each owns
+its prefixed environment settings. Import or configuration failures become
+visible catalog states and cannot stop Chat delivery or bot startup
+([ADR 0002](adr/0002-discovered-overflow-adapters.md)).
 
 **Consequences.** One dependency fewer, and a whole class of scope traps gone.
 The worker's seams remain the `Downloader` and `Delivery` protocols, declared
