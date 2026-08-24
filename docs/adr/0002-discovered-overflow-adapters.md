@@ -17,5 +17,7 @@ package is the same effort as an env line was. Everything else from ADR 0001
 stands: the Owner selects one destination for the whole bot, persisted
 independently of deployment configuration; a module that fails to import,
 construct or shape up is retained as a visible misconfigured state rather than
-silently dropped or allowed to stop startup — and is named by its class label
-whenever the class itself imported.
+silently dropped or allowed to stop startup — named by its class label when a
+single class with a usable label imported, by its file name otherwise. A
+subdirectory in the package is likewise a visible misconfigured entry, not a
+silent skip.

@@ -52,6 +52,11 @@ class TestDiscovery:
         assert choice.state is OverflowState.MISCONFIGURED
         assert choice.label == "Broken"
 
+    def test_an_ambiguous_module_is_named_from_its_file(self, tmp_path: Path) -> None:
+        # Two classes imported, so neither label can be trusted to be "the"
+        # Adapter's name — the file name is the only honest one left.
+        assert choice_of(catalog(tmp_path), "ambiguous").label == "Ambiguous"
+
     @pytest.mark.parametrize(
         ("adapter_id", "why"),
         [
@@ -66,6 +71,7 @@ class TestDiscovery:
             ("crashing", "the module raised on import"),
             ("exiting", "the module raised SystemExit on import"),
             ("none", "the module name collides with Off"),
+            ("packaged", "an Adapter is a single module, not a package"),
         ],
     )
     def test_every_malformed_module_is_isolated_as_misconfigured(
