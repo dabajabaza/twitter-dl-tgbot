@@ -10,13 +10,13 @@ from pathlib import Path
 import pytest
 from aiogram import Bot
 
+from clipivore.__main__ import build_dispatcher
+from clipivore.bot.handlers import fallback, links, overflow, start
+from clipivore.config import Settings
+from clipivore.runtime.worker import RequestQueue
+from clipivore.services.overflow import OverflowCatalog
 from tests.helpers.bot_harness import BotHarness, RecordingSession
 from tests.helpers.factories import build_settings
-from twitter_dl.__main__ import build_dispatcher
-from twitter_dl.bot.handlers import fallback, links, overflow, start
-from twitter_dl.config import Settings
-from twitter_dl.runtime.worker import RequestQueue
-from twitter_dl.services.overflow import OverflowCatalog
 
 # Handler routers are module-level singletons and a Router may attach to only
 # one Dispatcher per lifetime, so each test must hand them back. Kept in step

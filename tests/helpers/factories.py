@@ -4,8 +4,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from twitter_dl.config import Settings
-from twitter_dl.domain import Clip
+from clipivore.config import Settings
+from clipivore.domain import Clip
 
 # Shaped like a real token so aiogram's own validation passes; allowlisted in
 # .gitleaks.toml so the secret scanner does not trip over it.

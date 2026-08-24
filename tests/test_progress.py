@@ -4,8 +4,8 @@ import asyncio
 
 from aiogram.methods import DeleteMessage, EditMessageText
 
+from clipivore.bot.progress import ProgressReporter
 from tests.helpers.bot_harness import BotHarness
-from twitter_dl.bot.progress import ProgressReporter
 
 
 def build_reporter(harness: BotHarness, *, min_interval: float = 0.05) -> ProgressReporter:

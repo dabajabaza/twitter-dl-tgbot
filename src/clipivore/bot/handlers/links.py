@@ -9,12 +9,12 @@ from aiogram import Bot, Router
 from aiogram.filters import Filter
 from aiogram.types import Message
 
-from twitter_dl.bot import texts
-from twitter_dl.bot.progress import ProgressReporter
-from twitter_dl.config import Settings
-from twitter_dl.runtime.worker import Request, RequestQueue, SourceMessage
-from twitter_dl.services.links import extract_links
-from twitter_dl.services.overflow import OverflowCatalog
+from clipivore.bot import texts
+from clipivore.bot.progress import ProgressReporter
+from clipivore.config import Settings
+from clipivore.runtime.worker import Request, RequestQueue, SourceMessage
+from clipivore.services.links import extract_links
+from clipivore.services.overflow import OverflowCatalog
 
 logger = logging.getLogger(__name__)
 

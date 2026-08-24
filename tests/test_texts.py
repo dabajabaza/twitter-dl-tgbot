@@ -4,8 +4,8 @@ import re
 
 import pytest
 
-from twitter_dl.bot import texts
-from twitter_dl.services.overflow import OverflowChoice, OverflowState
+from clipivore.bot import texts
+from clipivore.services.overflow import OverflowChoice, OverflowState
 
 _PUBLIC = {
     name: value for name, value in vars(texts).items() if name.isupper() and isinstance(value, str)

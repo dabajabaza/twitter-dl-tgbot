@@ -6,7 +6,7 @@ reproduce the empty-Menu-with-no-hint problem ADR 0002 was written against.
 
 from pathlib import Path
 
-from twitter_dl.services.overflow import OverflowDestination
+from clipivore.services.overflow import OverflowDestination
 
 
 class PackagedDestination(OverflowDestination):

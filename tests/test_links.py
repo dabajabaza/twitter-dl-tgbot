@@ -2,8 +2,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from twitter_dl.errors import NotATweetLink
-from twitter_dl.services.links import (
+from clipivore.errors import NotATweetLink
+from clipivore.services.links import (
     extract_links,
     is_short_link,
     is_tweet_link,

@@ -6,7 +6,7 @@ Registered last, so it only ever sees what nothing else wanted.
 from aiogram import Router
 from aiogram.types import Message
 
-from twitter_dl.bot import texts
+from clipivore.bot import texts
 
 router = Router(name="fallback")
 

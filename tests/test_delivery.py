@@ -7,16 +7,16 @@ import pytest
 from aiogram.enums import ParseMode
 from aiogram.methods import SendVideo
 
-from tests.helpers.bot_harness import BotHarness
-from tests.helpers.factories import make_clip
-from twitter_dl.errors import OverflowFailed, OverflowUnavailable
-from twitter_dl.services.delivery import (
+from clipivore.errors import OverflowFailed, OverflowUnavailable
+from clipivore.services.delivery import (
     ChatDelivery,
     ClipDelivery,
     OverflowDelivery,
     overflow_name,
 )
-from twitter_dl.services.overflow import OverflowChoice, OverflowDestination, OverflowState
+from clipivore.services.overflow import OverflowChoice, OverflowDestination, OverflowState
+from tests.helpers.bot_harness import BotHarness
+from tests.helpers.factories import make_clip
 
 
 class FakeDestination(OverflowDestination):

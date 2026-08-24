@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from clipivore.config import Settings
 from tests.helpers.factories import FAKE_BOT_TOKEN, GUEST_ID, OWNER_ID, build_settings
-from twitter_dl.config import Settings
 
 
 def test_owner_is_always_allowed_even_when_the_list_is_empty(tmp_path: Path) -> None:
@@ -49,8 +49,8 @@ def test_adapter_owned_env_settings_do_not_look_unknown_to_core_settings(tmp_pat
             [
                 f"TELEGRAM_BOT_TOKEN={FAKE_BOT_TOKEN}",
                 f"OWNER_ID={OWNER_ID}",
-                "YANDEX_DISK_RCLONE_REMOTE=yandex:twitter-dl",
-                "SHARE_RCLONE_REMOTE=keenetic:twitter-dl",
+                "YANDEX_DISK_RCLONE_REMOTE=yandex:clipivore",
+                "SHARE_RCLONE_REMOTE=keenetic:clipivore",
             ]
         ),
         encoding="utf-8",

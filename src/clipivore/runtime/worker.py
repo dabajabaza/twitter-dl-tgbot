@@ -18,13 +18,14 @@ from typing import Protocol
 from aiogram import Bot
 from aiogram.enums import ParseMode
 
-from twitter_dl.bot import texts
-from twitter_dl.bot.captions import build_caption
-from twitter_dl.bot.progress import ProgressReporter
-from twitter_dl.config import Settings
-from twitter_dl.domain import Clip, DownloadProgress, ProgressCallback
-from twitter_dl.errors import (
+from clipivore.bot import texts
+from clipivore.bot.captions import build_caption
+from clipivore.bot.progress import ProgressReporter
+from clipivore.config import Settings
+from clipivore.domain import Clip, DownloadProgress, ProgressCallback
+from clipivore.errors import (
     AuthExpired,
+    ClipivoreError,
     DownloadFailed,
     DownloadTooLarge,
     NetworkUnavailable,
@@ -33,16 +34,15 @@ from twitter_dl.errors import (
     OverflowFailed,
     OverflowUnavailable,
     TweetUnavailable,
-    TwitterDlError,
 )
-from twitter_dl.services.cookies import CookieSession
-from twitter_dl.services.delivery import DeliveryResult, OverflowDelivery
-from twitter_dl.services.links import is_short_link, resolve_short_link
-from twitter_dl.services.overflow import OverflowChoice
+from clipivore.services.cookies import CookieSession
+from clipivore.services.delivery import DeliveryResult, OverflowDelivery
+from clipivore.services.links import is_short_link, resolve_short_link
+from clipivore.services.overflow import OverflowChoice
 
 logger = logging.getLogger(__name__)
 
-_REPLY_FOR: dict[type[TwitterDlError], str] = {
+_REPLY_FOR: dict[type[ClipivoreError], str] = {
     NotATweetLink: texts.NOT_A_TWEET,
     NoVideoInTweet: texts.NO_VIDEO,
     TweetUnavailable: texts.TWEET_UNAVAILABLE,
@@ -324,7 +324,7 @@ class RequestWorker:
                 request,
                 texts.OVERFLOW_FAILED.format(adapter=request.overflow.label),
             )
-        except TwitterDlError as exc:
+        except ClipivoreError as exc:
             logger.info("request for %s failed: %s: %s", request.url, type(exc).__name__, exc)
             await _say(request, _REPLY_FOR.get(type(exc), texts.DOWNLOAD_FAILED))
         finally:

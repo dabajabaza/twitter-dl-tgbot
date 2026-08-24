@@ -7,7 +7,7 @@ can break. The one exception is the delivery verdict, whose HTML lives in
 bot/captions.py with every foreign string escaped; this module stays plain.
 """
 
-from twitter_dl.services.overflow import (
+from clipivore.services.overflow import (
     SAVED_SELECTION_ID,
     OverflowCatalog,
     OverflowChoice,

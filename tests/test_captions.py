@@ -1,6 +1,6 @@
 """The delivery caption: tweet text, an author footer, and Telegram's limit."""
 
-from twitter_dl.bot.captions import CAPTION_LIMIT, build_caption, utf16_length
+from clipivore.bot.captions import CAPTION_LIMIT, build_caption, utf16_length
 
 TWEET = "https://x.com/cats/status/1"
 PROFILE = "https://x.com/cats"

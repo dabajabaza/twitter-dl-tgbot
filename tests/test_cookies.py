@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from twitter_dl.services.cookies import CookieSession
+from clipivore.services.cookies import CookieSession
 
 
 def build(tmp_path: Path, body: str = "netscape cookies") -> tuple[CookieSession, Path]:

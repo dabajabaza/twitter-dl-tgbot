@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from twitter_dl.services.overflow import OverflowDestination
+from clipivore.services.overflow import OverflowDestination
 
 
 class SynchronousDestination(OverflowDestination):

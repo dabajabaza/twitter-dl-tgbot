@@ -5,12 +5,12 @@ from pathlib import Path
 from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage, SetMyCommands
 from aiogram.types import BotCommandScopeChat
 
+from clipivore.__main__ import _set_commands
+from clipivore.bot import texts
+from clipivore.bot.handlers.overflow import _keyboard
+from clipivore.services.overflow import OverflowCatalog
 from tests.helpers.bot_harness import BotHarness
 from tests.helpers.factories import GUEST_ID, OWNER_ID
-from twitter_dl.__main__ import _set_commands
-from twitter_dl.bot import texts
-from twitter_dl.bot.handlers.overflow import _keyboard
-from twitter_dl.services.overflow import OverflowCatalog
 
 FAKES = "tests.helpers.fake_adapters"
 EMPTY = "tests.helpers.no_adapters"

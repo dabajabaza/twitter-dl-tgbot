@@ -4,9 +4,9 @@ from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 
-from twitter_dl.bot import texts
-from twitter_dl.config import Settings
-from twitter_dl.services.overflow import OverflowCatalog
+from clipivore.bot import texts
+from clipivore.config import Settings
+from clipivore.services.overflow import OverflowCatalog
 
 router = Router(name="start")
 

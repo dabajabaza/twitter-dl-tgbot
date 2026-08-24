@@ -4,10 +4,10 @@ from pathlib import Path
 
 from aiogram.methods import DeleteMessage, EditMessageText, SendMessage
 
+from clipivore.bot import texts
+from clipivore.services.overflow import OverflowCatalog
 from tests.helpers.bot_harness import BotHarness
 from tests.helpers.factories import OWNER_ID
-from twitter_dl.bot import texts
-from twitter_dl.services.overflow import OverflowCatalog
 
 TWEET = "https://x.com/someone/status/1234567890"
 OTHER_TWEET = "https://x.com/someone/status/9876543210"

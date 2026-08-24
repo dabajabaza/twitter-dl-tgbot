@@ -4,8 +4,8 @@ from pathlib import Path
 
 from pydantic_settings import SettingsConfigDict
 
-from twitter_dl.adapters._rclone import RcloneSettings, run_rclone
-from twitter_dl.services.overflow import OverflowDestination
+from clipivore.adapters._rclone import RcloneSettings, run_rclone
+from clipivore.services.overflow import OverflowDestination
 
 
 class YandexDiskSettings(RcloneSettings):
