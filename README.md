@@ -13,8 +13,8 @@ real account, one uplink.
 
 ## What it does
 
-- A link in a message (`x.com`, `twitter.com`, `t.co`) becomes a video in the
-  chat. There is no command to remember — the link is the command.
+- A link in a message (`x.com`, `twitter.com`, `t.co`, `bsky.app`) becomes a
+  video in the chat. There is no command to remember — the link is the command.
 - Several links in one message, and several clips in one post, are all handled
   in turn.
 - A clip up to 50 MB (the Bot API ceiling) arrives in the chat, captioned with

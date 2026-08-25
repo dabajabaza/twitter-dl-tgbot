@@ -8,6 +8,13 @@ at all — which is the point of it going first.
 Two spellings yt-dlp accepts are deliberately not accepted here: ``at://`` URIs
 are not links a person shares in a chat, and ``main.bsky.dev`` is the staging
 deployment. Neither is worth widening the surface for.
+
+Two things Bluesky cannot currently answer well, both recorded in
+ARCHITECTURE.md D19: a deleted or blocked post arrives as a plain download
+failure rather than as "that post is gone", and a quote post that pairs an
+external link card with the quoted post's own video yields "no video in this
+post" — the card is refused by the extractor lock (D15) before the video is
+reached. Both are the platform's shape meeting yt-dlp's, not a decision.
 """
 
 import re
@@ -36,22 +43,27 @@ PROFILE = EngineProfile(
     # linking to a video elsewhere would come back as that stranger's video,
     # captioned with this post.
     allowed_extractors=("bluesky",),
-    # Bluesky deletes rather than tombstones, and a blocked or deactivated
-    # account reads the same way.
-    account_state_markers=(
-        "not found",
-        "could not be found",
-        "deleted",
-        "deactivated",
-        "suspended",
-        "blocked",
-    ),
+    # Empty, and not for lack of states worth naming. A deleted, blocked or
+    # deactivated post is unreachable through yt-dlp's error text: the XRPC API
+    # returns those as HTTP 400 with the reason only in the JSON body, which
+    # yt-dlp drops, and a thread whose `$type` says notFoundPost raises a bare
+    # KeyError that arrives as "an extractor error has occurred … please report
+    # this issue". So such a post ends as a plain download failure rather than
+    # "that post may be deleted", and markers here would only look like they
+    # were doing something. Fixing it properly means reading the response body
+    # in the engine, or an upstream `expected=True` — see ARCHITECTURE.md D19.
+    account_state_markers=(),
     # No auth markers on purpose: this Provider holds no Cookie session, so it
     # can never be the cause of an Auth expiry alert. A sentence that looked
     # like one would wake the Owner over something they cannot fix.
     no_video_markers=("no video could be found",),
-    unavailable_markers=("unavailable", "private"),
-    profile_url=lambda handle: f"https://bsky.app/profile/{handle}",
+    # No `clean_description` either, and that is deliberate: `record.text` is
+    # the author's text as typed, with links kept in facets alongside rather
+    # than appended to it. There is no furniture to strip.
+    #
+    # A quote post's metadata describes the post being quoted — including its
+    # id — so the id for external names is read from the link instead (D7).
+    post_id_from_url=lambda url: BlueskyProvider.post_id(url),
 )
 
 

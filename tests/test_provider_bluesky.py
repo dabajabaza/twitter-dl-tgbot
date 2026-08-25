@@ -6,20 +6,32 @@ than on a live download.
 """
 
 import pytest
+from yt_dlp.utils import DownloadError
 
+from clipivore.errors import DownloadFailed, NetworkUnavailable, NoVideoInPost
 from clipivore.providers import bluesky
 from clipivore.providers.bluesky import BlueskyProvider
 from clipivore.providers.x import XProvider
+from clipivore.services.downloader import _classify
 from clipivore.services.providers import ProviderCatalog, ProviderContext
-
-CATALOG = ProviderCatalog(ProviderContext())
 
 HANDLE_POST = "https://bsky.app/profile/blu3blue.bsky.social/post/3l4omssdl632g"
 DID_POST = "https://bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur/post/3l3vgf77uco2g"
 
 
+def catalog() -> ProviderCatalog:
+    """Built per call, so the hermetic-settings fixture has already run.
+
+    A module-level catalog is constructed at collection time, before any
+    fixture — which is exactly the environment leak the suite is guarded
+    against, and it showed as "provider x is misconfigured" in the collection
+    log of anyone who had COOKIES_FILE set.
+    """
+    return ProviderCatalog(ProviderContext())
+
+
 def urls(*sources: str | None) -> list[str]:
-    return [link.url for link in CATALOG.extract(*sources)]
+    return [link.url for link in catalog().extract(*sources)]
 
 
 @pytest.mark.parametrize(
@@ -74,19 +86,62 @@ def test_two_links_glued_by_a_comma_are_two_links() -> None:
 
 class TestTheTwoProvidersDoNotOverlap:
     def test_each_platform_claims_only_its_own_links(self) -> None:
-        assert CATALOG.claim(HANDLE_POST) is not None
-        assert CATALOG.claim(HANDLE_POST).name == "Bluesky"  # type: ignore[union-attr]
-        assert CATALOG.claim("https://x.com/a/status/1").name == "X"  # type: ignore[union-attr]
+        assert catalog().claim(HANDLE_POST) is not None
+        assert catalog().claim(HANDLE_POST).name == "Bluesky"  # type: ignore[union-attr]
+        assert catalog().claim("https://x.com/a/status/1").name == "X"  # type: ignore[union-attr]
         assert not XProvider.post_link.match(HANDLE_POST)
         assert not BlueskyProvider.post_link.match("https://x.com/a/status/1")
 
     def test_links_to_both_platforms_keep_the_order_they_were_written(self) -> None:
-        # The reason the catalog builds one combined pattern instead of asking
-        # each Provider in turn: a per-Provider pass groups by platform, and
-        # with a nearly full queue that decides whose link gets dropped.
+        # The reason the catalog merges every Provider's matches by position
+        # instead of taking one Provider at a time: a per-Provider pass groups
+        # links by platform, and with a nearly full queue that decides whose
+        # link gets dropped.
         tweet = "https://x.com/someone/status/1234567890"
         assert urls(f"{HANDLE_POST} then {tweet}") == [HANDLE_POST, tweet]
         assert urls(f"{tweet} then {HANDLE_POST}") == [tweet, HANDLE_POST]
+
+
+class TestWhatBlueskysErrorsCanAndCannotSay:
+    """The honest half of D19: what the engine's sentences actually carry."""
+
+    def test_a_post_with_no_video_is_named_as_such(self) -> None:
+        error = DownloadError("ERROR: [Bluesky] abc: No video could be found in this post")
+        assert isinstance(_classify(error, bluesky.PROFILE), NoVideoInPost)
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            # A deleted or blocked post: XRPC answers 400 with the reason only
+            # in the body, which yt-dlp drops.
+            "ERROR: [Bluesky] abc: Unable to download JSON metadata: HTTP Error 400: Bad Request",
+            # notFoundPost / blockedPost reach the extractor as a bare KeyError.
+            "ERROR: [Bluesky] abc: An extractor error has occurred. (caused by KeyError('post'))",
+        ],
+    )
+    def test_a_gone_post_is_only_a_download_failure_and_the_profile_admits_it(
+        self, message: str
+    ) -> None:
+        # Pinned deliberately: this is the limitation D19 records, not a state
+        # somebody should "fix" by adding markers that cannot match.
+        assert isinstance(_classify(DownloadError(message), bluesky.PROFILE), DownloadFailed)
+        assert bluesky.PROFILE.account_state_markers == ()
+
+    def test_an_api_hiccup_is_not_reported_as_a_deleted_post(self) -> None:
+        error = DownloadError("ERROR: [Bluesky] abc: HTTP Error 503: Service Unavailable")
+        assert isinstance(_classify(error, bluesky.PROFILE), NetworkUnavailable)
+
+
+class TestAQuotePostIsNamedAfterTheLinkThatWasSent:
+    def test_the_id_comes_from_the_url_not_from_the_quoted_post(self) -> None:
+        # yt-dlp's own fixture for this URL reports id 3l3vgf77uco2g — the post
+        # being quoted — so without the hook the stored file would be named
+        # after a post the sender never linked to (D7).
+        sent = "https://bsky.app/profile/dannybhoix.bsky.social/post/3l6oe5mtr2c2j"
+        assert bluesky.PROFILE.post_id_from_url(sent) == "3l6oe5mtr2c2j"
+
+    def test_a_url_it_does_not_recognise_yields_nothing_rather_than_a_guess(self) -> None:
+        assert bluesky.PROFILE.post_id_from_url("https://example.com/x") is None
 
 
 class TestBlueskyNeedsNoConfiguration:
@@ -97,9 +152,10 @@ class TestBlueskyNeedsNoConfiguration:
         assert BlueskyProvider(ProviderContext()).cookies is None
         assert bluesky.PROFILE.auth_markers == ()
 
-    def test_it_is_ready_with_an_empty_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        for name in ("COOKIES_FILE", "YTDLP_PROXY", "TELEGRAM_PROXY"):
-            monkeypatch.delenv(name, raising=False)
+    def test_it_is_ready_with_nothing_configured_at_all(self) -> None:
+        # Not just "no cookies": Bluesky reads no environment whatsoever, which
+        # is what makes it deployable without touching the server's env file.
+        # The hermetic fixture has already emptied everything a Provider reads.
         choice = ProviderCatalog(ProviderContext()).get("bluesky")
         assert choice is not None
         assert choice.ready

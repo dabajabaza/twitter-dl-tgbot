@@ -510,3 +510,35 @@ them all (D10).
 **Revisit when** a Provider needs per-request state, or when out-of-repo
 Providers become desirable — both would break the zero-ceremony discovery this
 rests on.
+
+---
+
+## D19. What a Provider cannot say is written down, not papered over
+
+**Context.** A Provider's verdicts are only as good as the sentences its engine
+produces. Bluesky's are worse than they look: the XRPC API reports a deleted,
+blocked or deactivated post as HTTP 400 with the reason in a JSON body that
+yt-dlp discards, and a thread marked `notFoundPost` reaches the extractor as a
+bare `KeyError`, arriving as "an extractor error has occurred … please report
+this issue". Neither carries a word this bot could match on. Separately, a quote
+post pairing an external link card with the quoted post's own video builds a
+playlist whose first entry is the card; the extractor lock (D15) refuses it, and
+yt-dlp abandons the playlist before reaching the video.
+
+**Decision.** Say so, in the Provider, rather than shipping marker tables that
+appear to handle states they cannot see. Bluesky's `account_state_markers` is
+empty with a comment explaining why, and both limits are named here. Two things
+would genuinely fix the first — reading the HTTP response body inside
+`_classify`, which would serve every Provider, or an upstream change raising
+`ExtractorError(expected=True)` for those thread types — and neither belongs in
+the change that introduced the Provider.
+
+**Consequences.** A deleted Bluesky post is answered with "Download failed. The
+details are in the bot's log" instead of "that post may be deleted", and the log
+line invites a yt-dlp bug report that should not be filed. That is a worse
+message, not a wrong download, and it is visible rather than disguised. The
+quote-post case is narrow: a record carries exactly one embed, so it needs a
+quote post specifically.
+
+**Revisit when** either fix above is worth its own change — the body-reading one
+also removes the 5xx guesswork the engine currently does with reason phrases.
