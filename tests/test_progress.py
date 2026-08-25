@@ -92,7 +92,7 @@ async def test_the_last_word_stops_further_updates(harness: BotHarness) -> None:
 async def test_the_last_word_can_carry_markup_when_asked_to(harness: BotHarness) -> None:
     reporter = build_reporter(harness)
 
-    await reporter.finish('<a href="https://x.com/a">Open in X</a>', parse_mode="HTML")
+    await reporter.finish('<a href="https://x.com/a">Open in Twitter</a>', parse_mode="HTML")
 
     assert harness.session.calls_of(EditMessageText)[-1].parse_mode == "HTML"
 

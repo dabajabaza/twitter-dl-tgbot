@@ -19,7 +19,7 @@ dependencies = [
     # production actually uses (see docs/ARCHITECTURE.md D6).
     "aiohttp-socks>=0.10.1",
     "pydantic-settings>=2.14.2",
-    # The one dependency that ages in days, not months: X breaks its internal
+    # The one dependency that ages in days, not months: Twitter breaks its internal
     # API and the fix lands on PyPI the same day. See docs/ARCHITECTURE.md D2.
     "yt-dlp>=2025.10.22",
 ]

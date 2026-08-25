@@ -27,7 +27,7 @@ and restarts the bot.
 **Consequences.** No database, no migrations, no invite codes and no expiry for
 them. Changing the roster requires access to the server — which, for "a personal
 bot on personal credentials", is a feature rather than a shortcoming: every
-extra user spends the owner's X account.
+extra user spends the owner's Twitter account.
 
 **Revisit when** there are more than a dozen users, or self-service sign-up
 starts to make sense.
@@ -36,7 +36,7 @@ starts to make sense.
 
 ## D2. yt-dlp is a project dependency, not a system package
 
-**Context.** yt-dlp is the one dependency that ages in days: X breaks its
+**Context.** yt-dlp is the one dependency that ages in days: Twitter breaks its
 internal API and the fix reaches PyPI the same day. In the FreeBSD ports the lag
 runs to months, and the quarterly branch trails further still.
 
@@ -60,7 +60,7 @@ the jail.
 
 **Context.** Public tweets download without any authentication, but NSFW,
 age-gated content and protected accounts do not. yt-dlp dropped password login
-long ago (broken on X's side), and the official API costs money and does not
+long ago (broken on Twitter's side), and the official API costs money and does not
 hand over video anyway.
 
 **Decision.** A Netscape-format `cookies.txt` exported from a browser sits on
@@ -148,7 +148,7 @@ be an extra Bot API call on every request.
 
 ## D6. All outbound traffic goes through the host's sing-box
 
-**Context.** Neither Telegram nor X is reachable directly. The server's host
+**Context.** Neither Telegram nor Twitter is reachable directly. The server's host
 already runs sing-box (SOCKS/HTTP on `127.0.0.1:1080`, VLESS outbound), the
 `bots` jail inherits the host's network stack (`ip4 = inherit`), and the
 neighbouring bots take exactly the same route.
@@ -157,9 +157,9 @@ neighbouring bots take exactly the same route.
 address for yt-dlp (`YTDLP_PROXY` defaults to `TELEGRAM_PROXY` — it is the same
 hop).
 
-**Consequences.** The exit IP matches the one the owner browses X from, so from
-X's point of view the cookies and the address are consistent. No second proxy
-inside the jail is needed. If sing-box goes down, the bot answers "Can't reach X
+**Consequences.** The exit IP matches the one the owner browses Twitter from, so from
+Twitter's point of view the cookies and the address are consistent. No second proxy
+inside the jail is needed. If sing-box goes down, the bot answers "Can't reach Twitter
 right now" instead of hanging: proxy errors land in the `NetworkUnavailable`
 class.
 
@@ -180,7 +180,7 @@ selection is captured when a Request enters the queue, so changing Menu cannot
 redirect work already accepted.
 
 When no working Adapter is selected, yt-dlp is stopped as soon as an exact
-announced size or received-byte counter crosses the Chat ceiling. X commonly
+announced size or received-byte counter crosses the Chat ceiling. Twitter commonly
 uses HLS, whose final merged size is not reliably known in advance; therefore a
 final file-size check remains authoritative. A multi-Clip Request is atomic on
 this early-refusal path: the first overflow ends the whole Request. Both
@@ -190,7 +190,7 @@ one that finished and only then failed the ceiling — and the abort leaves an
 INFO line in the log, which the shared text alone cannot.
 
 **Consequences.** The common external file name
-(`<date>-<author>-<id>.mp4`) is sortable and greppable. X controls its metadata,
+(`<date>-<author>-<id>.mp4`) is sortable and greppable. Twitter controls its metadata,
 so everything but letters, digits, `_` and `-` is collapsed — dots included,
 so a `../..` in an account name means nothing at any destination. Share files
 and Yandex public links have no automatic retention.
@@ -208,7 +208,7 @@ downloads would not finish sooner: they would share the same pipe.
 **Decision.** A single queue consumer. Per request, `asyncio.timeout(1800)`
 covering both the download and the delivery. Progress appears in one editable
 message, edited no more than once every five seconds, and names what is moving:
-X clips usually arrive as separate video and audio files (`bv*+ba`), each
+Twitter clips usually arrive as separate video and audio files (`bv*+ba`), each
 honestly running 0→100% on its own, so the message says which stream this is
 and how large it is — otherwise the second run reads as a mysterious restart.
 The upload status names the clip's size for the same reason.
@@ -376,7 +376,7 @@ compensate with a custom rule.
 
 **Decision.** The variable is called `TELEGRAM_BOT_TOKEN`, and a custom rule
 matching the token's shape (8-10 digits, a colon, 35 base64url characters) is
-added anyway — together with a rule for X cookies.
+added anyway — together with a rule for Twitter cookies.
 
 **Consequences.** The secret is caught by both the stock rule and ours. The
 variable name differs from the neighbours' — a deliberate divergence, not an
@@ -384,14 +384,14 @@ oversight.
 
 ---
 
-## D15. yt-dlp is allowed to visit X and nowhere else
+## D15. yt-dlp is allowed to visit Twitter and nowhere else
 
 **Context.** A tweet with no media but an outbound link is handled by the
 twitter extractor as `url_result(expanded_url)` — that is, it hands control to
 the extractor for whatever site the link points to. Out of the box yt-dlp knows
 1744 sites.
 
-**Decision.** `allowed_extractors: ["twitter.*"]` — exactly six X extractors and
+**Decision.** `allowed_extractors: ["twitter.*"]` — exactly six Twitter extractors and
 nothing else. An external URL produces "No suitable extractor found", which the
 taxonomy files under `NoVideoInPost`. *(Extended by D18: the lock is now
 declared per Provider and is never the union of several.)*
@@ -399,7 +399,7 @@ declared per Provider and is never the union of several.)*
 **Consequences.** A tweet linking to a video on someone else's site honestly
 answers "that tweet has no video in it", instead of delivering that stranger's
 video captioned with the tweet and filing it externally under their metadata.
-It also closes the path out of X through the owner's proxy: previously the
+It also closes the path out of Twitter through the owner's proxy: previously the
 author of a tweet — a stranger — effectively chose where the bot would go. The
 restriction is covered by a test.
 
@@ -435,14 +435,14 @@ the chat, so every download leaves two messages where one would do. The raw URL
 as a caption says nothing about what the video is.
 
 **Decision.** The caption is the tweet's text, a blank line, then a footer:
-`@handle · Open in X`, where the handle links to the author's profile and the
+`@handle · Open in Twitter`, where the handle links to the author's profile and the
 label links to the tweet. The HTML lives in `bot/captions.py` — the one module
 allowed to emit markup (D10). Telegram counts the 1024-unit caption limit on the
 *rendered* text in UTF-16 code units, markup excluded, so the budget for the
 post's text is 1024 minus the rendered footer minus the separator; the footer
 is appended after fitting and is never truncated. Link furniture a platform
 appends to its own text is stripped by that Provider's
-`EngineProfile.clean_description` — for X, the trailing `t.co` pointer
+`EngineProfile.clean_description` — for Twitter, the trailing `t.co` pointer
 (`providers/x.py`); one in mid-sentence is the author's words and stays.
 
 Once everything a user's message asked for arrived, the message itself is
@@ -473,7 +473,7 @@ the 4096-character message budget appears.
 
 **Context.** The bot knew exactly one platform, and said so in three unrelated
 places: link regexes and a host allowlist in `services/links.py`, an extractor
-lock and error-marker tables in `services/downloader.py`, and the word "X" in a
+lock and error-marker tables in `services/downloader.py`, and the word "Twitter" in a
 dozen strings in `bot/texts.py`. Adding a second platform meant editing all
 three, and nothing would have caught one platform's assumptions leaking into
 another's path.

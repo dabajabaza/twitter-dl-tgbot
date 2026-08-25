@@ -64,8 +64,8 @@ def make_clip(
 def make_provider_choice(
     *,
     downloader: Downloader | None = None,
-    provider_id: str = "x",
-    name: str = "X",
+    provider_id: str = "twitter",
+    name: str = "Twitter",
     cookies: CookieSession | None = None,
     ready: bool = True,
     resolve: Callable[[str], Awaitable[str]] | None = None,
@@ -77,7 +77,7 @@ def make_provider_choice(
     """
 
     class _TestProvider(Provider):
-        name = "X"
+        name = "Twitter"
         hint = "test provider"
         post_link = _POST_LINK
 

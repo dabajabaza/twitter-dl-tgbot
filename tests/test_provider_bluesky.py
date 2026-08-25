@@ -11,7 +11,7 @@ from yt_dlp.utils import DownloadError
 from clipivore.errors import DownloadFailed, NetworkUnavailable, NoVideoInPost
 from clipivore.providers import bluesky
 from clipivore.providers.bluesky import BlueskyProvider
-from clipivore.providers.x import XProvider
+from clipivore.providers.twitter import TwitterProvider
 from clipivore.services.downloader import _classify
 from clipivore.services.providers import ProviderCatalog, ProviderContext
 
@@ -88,8 +88,8 @@ class TestTheTwoProvidersDoNotOverlap:
     def test_each_platform_claims_only_its_own_links(self) -> None:
         assert catalog().claim(HANDLE_POST) is not None
         assert catalog().claim(HANDLE_POST).name == "Bluesky"  # type: ignore[union-attr]
-        assert catalog().claim("https://x.com/a/status/1").name == "X"  # type: ignore[union-attr]
-        assert not XProvider.post_link.match(HANDLE_POST)
+        assert catalog().claim("https://x.com/a/status/1").name == "Twitter"  # type: ignore[union-attr]
+        assert not TwitterProvider.post_link.match(HANDLE_POST)
         assert not BlueskyProvider.post_link.match("https://x.com/a/status/1")
 
     def test_links_to_both_platforms_keep_the_order_they_were_written(self) -> None:

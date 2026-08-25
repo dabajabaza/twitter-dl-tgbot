@@ -2,13 +2,13 @@
 
 from clipivore.bot.captions import CAPTION_LIMIT, build_caption, utf16_length
 
-PROVIDER = "X"
+PROVIDER = "Twitter"
 
 TWEET = "https://x.com/cats/status/1"
 PROFILE = "https://x.com/cats"
-FOOTER = f'<a href="{PROFILE}">@cats</a> · <a href="{TWEET}">Open in X</a>'
-# The rendered footer — "@cats · Open in X" — as Telegram will count it.
-FOOTER_RENDERED_UNITS = utf16_length("@cats · Open in X")
+FOOTER = f'<a href="{PROFILE}">@cats</a> · <a href="{TWEET}">Open in Twitter</a>'
+# The rendered footer — "@cats · Open in Twitter" — as Telegram will count it.
+FOOTER_RENDERED_UNITS = utf16_length("@cats · Open in Twitter")
 
 
 def caption(description: str) -> str:
@@ -33,11 +33,11 @@ class TestShape:
 
     def test_without_an_uploader_the_footer_is_only_the_post_link(self) -> None:
         built = build_caption("text", TWEET, provider=PROVIDER)
-        assert built == f'text\n\n<a href="{TWEET}">Open in X</a>'
+        assert built == f'text\n\n<a href="{TWEET}">Open in Twitter</a>'
 
     def test_without_a_profile_url_the_handle_stays_plain_text(self) -> None:
         built = build_caption("text", TWEET, provider=PROVIDER, uploader="cats")
-        assert built == f'text\n\n@cats · <a href="{TWEET}">Open in X</a>'
+        assert built == f'text\n\n@cats · <a href="{TWEET}">Open in Twitter</a>'
 
 
 class TestEscaping:
@@ -85,5 +85,5 @@ class TestFitting:
 
     def test_the_footer_is_never_truncated(self) -> None:
         built = caption("z" * 5000)
-        assert built.endswith(f' · <a href="{TWEET}">Open in X</a>')
+        assert built.endswith(f' · <a href="{TWEET}">Open in Twitter</a>')
         assert f'<a href="{PROFILE}">@cats</a>' in built

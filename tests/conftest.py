@@ -37,7 +37,7 @@ def hermetic_provider_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     """Keep the developer's own environment out of every Provider.
 
     Without this, `COOKIES_FILE=/tmp` in a shell — or a production `.env` copied
-    into the working tree — makes X misconfigured and fails tests that have
+    into the working tree — makes Twitter misconfigured and fails tests that have
     nothing to do with cookies. Anyone running the suite on the deploy host hits
     it immediately.
     """
@@ -64,7 +64,7 @@ async def harness(settings: Settings) -> AsyncIterator[BotHarness]:
         "tests.helpers.no_adapters",
         state_file=settings.overflow_state_file,
     )
-    # The real providers package: handler tests need X's actual link patterns,
+    # The real providers package: handler tests need Twitter's actual link patterns,
     # and nothing here ever downloads.
     provider_catalog = ProviderCatalog()
     dp = build_dispatcher(settings, queue, overflow_catalog, provider_catalog)

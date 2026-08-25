@@ -40,7 +40,7 @@ It is deleted once every Request from it succeeded; any failure — including a
 link refused by a full queue — leaves it in place, so the person keeps the link
 to retry.
 
-**Clip** — one video file extracted from a post. A post may yield several; an X
+**Clip** — one video file extracted from a post. A post may yield several; a Twitter
 "GIF" is a Clip too (a looping, audio-less mp4), not a separate kind of thing.
 
 **Verdict** — how a Request ended: the clips were delivered, or the reason was
@@ -91,7 +91,7 @@ remain until the Owner removes them manually; there is no automatic retention.
 
 **Cookie session** — the Owner's session with one Provider, exported from a
 browser (`cookies.txt`). It is how the bot identifies itself there; a Provider
-without one reaches only public posts. Today only X has one — Bluesky's public
+without one reaches only public posts. Today only Twitter has one — Bluesky's public
 posts need none.
 
 **Auth expiry** — the state in which a Provider's Cookie session no longer

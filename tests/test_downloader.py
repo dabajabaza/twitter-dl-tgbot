@@ -17,7 +17,7 @@ from clipivore.errors import (
     NoVideoInPost,
     PostUnavailable,
 )
-from clipivore.providers import x as x_provider
+from clipivore.providers import twitter as twitter_provider
 from clipivore.services import downloader as module
 from clipivore.services.providers import ProviderCatalog, ProviderChoice, ProviderContext
 
@@ -25,15 +25,15 @@ LOGIN_HINT = InfoExtractor._login_hint(InfoExtractor)
 
 TWEET = "https://x.com/someone/status/1234567890"
 
-# The real thing, not a stand-in: these tests are about how X's own sentences
+# The real thing, not a stand-in: these tests are about how Twitter's own sentences
 # and metadata are read, so a hand-written profile would test the test. Read as
 # a declaration rather than built from a constructed Provider, so collecting
 # this module cannot depend on what is in the environment.
-X_PROFILE = x_provider.PROFILE
+TWITTER_PROFILE = twitter_provider.PROFILE
 
 
 def clips_from_info(info: object, url: str) -> list[Clip]:
-    return module._clips_from_info(info, url, X_PROFILE)
+    return module._clips_from_info(info, url, TWITTER_PROFILE)
 
 
 def engine_of(choice: ProviderChoice) -> module.YtDlpDownloader:
@@ -44,7 +44,7 @@ def engine_of(choice: ProviderChoice) -> module.YtDlpDownloader:
     return downloader
 
 
-# The exact sentences the X extractor raises, read out of its source rather
+# The exact sentences the Twitter extractor raises, read out of its source rather
 # than imagined: a taxonomy tested against invented strings certifies nothing.
 @pytest.mark.parametrize(
     ("message", "expected"),
@@ -59,7 +59,7 @@ def engine_of(choice: ProviderChoice) -> module.YtDlpDownloader:
         ("This account is suspended", PostUnavailable),
         ("Broadcast no longer exists", PostUnavailable),
         ("Twitter Space not found", PostUnavailable),
-        # raise_no_formats() / restriction to X extractors.
+        # raise_no_formats() / restriction to Twitter extractors.
         ("No video could be found in this tweet", NoVideoInPost),
         ("Media #1 is not a video", NoVideoInPost),
         ("No suitable extractor found for URL https://youtube.com/watch?v=x", NoVideoInPost),
@@ -74,7 +74,7 @@ def engine_of(choice: ProviderChoice) -> module.YtDlpDownloader:
 def test_every_failure_is_sorted_into_a_class_the_worker_answers_for(
     message: str, expected: type[Exception]
 ) -> None:
-    assert isinstance(module._classify(DownloadError(message), X_PROFILE), expected)
+    assert isinstance(module._classify(DownloadError(message), TWITTER_PROFILE), expected)
 
 
 def test_the_cookie_boilerplate_alone_never_means_our_session_died() -> None:
@@ -128,7 +128,7 @@ class TestProgress:
         assert progress.stream == "video"
 
     def test_an_audio_only_stream_is_named_audio(self) -> None:
-        # The realistic X shape: an HLS EXT-X-MEDIA audio rendition, for which
+        # The realistic Twitter shape: an HLS EXT-X-MEDIA audio rendition, for which
         # yt-dlp sets vcodec="none" but never fills acodec at all. Keying on
         # acodec would leave every real audio run nameless.
         status = {
@@ -151,7 +151,7 @@ class TestProgress:
         assert progress.stream == "audio"
 
     def test_a_single_combined_file_gets_no_stream_name(self) -> None:
-        # The /b fallback (X GIFs, no ffmpeg) downloads one file with both
+        # The /b fallback (Twitter GIFs, no ffmpeg) downloads one file with both
         # codecs; naming it "video" would promise an audio run that never comes.
         status = {
             "status": "downloading",
@@ -195,7 +195,7 @@ class TestDownloadCeiling:
     async def test_a_known_oversized_stream_is_refused_before_its_body(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        downloader = module.YtDlpDownloader(X_PROFILE)
+        downloader = module.YtDlpDownloader(TWITTER_PROFILE)
 
         def fake_extract(
             url: str,
@@ -223,7 +223,7 @@ class TestDownloadCeiling:
     async def test_an_unknown_stream_is_stopped_as_soon_as_received_bytes_cross_the_limit(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        downloader = module.YtDlpDownloader(X_PROFILE)
+        downloader = module.YtDlpDownloader(TWITTER_PROFILE)
 
         def fake_extract(
             url: str,
@@ -243,7 +243,7 @@ class TestDownloadCeiling:
     async def test_separate_streams_share_one_received_byte_budget(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        downloader = module.YtDlpDownloader(X_PROFILE)
+        downloader = module.YtDlpDownloader(TWITTER_PROFILE)
 
         def fake_extract(
             url: str,
@@ -279,7 +279,7 @@ class TestDownloadCeiling:
     async def test_each_clip_has_its_own_received_byte_budget(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        downloader = module.YtDlpDownloader(X_PROFILE)
+        downloader = module.YtDlpDownloader(TWITTER_PROFILE)
         first = tmp_path / "first.mp4"
         second = tmp_path / "second.mp4"
         first.write_bytes(b"1")
@@ -329,7 +329,7 @@ class TestDownloadCeiling:
 
     def test_exact_sizes_of_selected_streams_are_summed(self, tmp_path: Path) -> None:
         hits: list[int] = []
-        options = module.YtDlpDownloader(X_PROFILE)._options(
+        options = module.YtDlpDownloader(TWITTER_PROFILE)._options(
             tmp_path,
             lambda status: None,
             max_bytes=50,
@@ -345,7 +345,7 @@ class TestDownloadCeiling:
 
     def test_content_length_refusal_raises_the_typed_exit_immediately(self, tmp_path: Path) -> None:
         hits: list[int] = []
-        options = module.YtDlpDownloader(X_PROFILE)._options(
+        options = module.YtDlpDownloader(TWITTER_PROFILE)._options(
             tmp_path,
             lambda status: None,
             max_bytes=50,
@@ -428,7 +428,7 @@ class TestClipsFromInfo:
     def test_the_trailing_media_pointer_is_stripped_from_the_text(self, tmp_path: Path) -> None:
         video = tmp_path / "a.mp4"
         video.write_bytes(b"x")
-        # X appends its own t.co link to the media; both schemes occur, and a
+        # Twitter appends its own t.co link to the media; both schemes occur, and a
         # tweet with several media gets several. One in mid-sentence is the
         # author's own words and stays.
         entry = self._entry(
@@ -481,13 +481,14 @@ class TestTransportFailuresAreNotThePlatformsFault:
         # "503 Service Unavailable" contains the word "unavailable", so before
         # this it told somebody their post had been deleted every time the API
         # hiccupped.
-        assert isinstance(module._classify(DownloadError(message), X_PROFILE), NetworkUnavailable)
+        classified = module._classify(DownloadError(message), TWITTER_PROFILE)
+        assert isinstance(classified, NetworkUnavailable)
 
     def test_a_4xx_is_still_left_to_the_platform_to_explain(self) -> None:
         # Only 5xx: a 4xx is about this request, and the platform's own markers
         # are what read it.
         error = DownloadError("HTTP Error 404: Not Found")
-        assert isinstance(module._classify(error, X_PROFILE), PostUnavailable)
+        assert isinstance(module._classify(error, TWITTER_PROFILE), PostUnavailable)
 
 
 class TestTheIdInAnExternalNameComesFromTheLink:
@@ -572,7 +573,7 @@ class TestEveryProviderStaysOnItsOwnPlatform:
 
     def test_a_link_off_the_platform_is_reported_as_a_post_without_video(self) -> None:
         error = DownloadError("ERROR: No suitable extractor found for URL https://youtube.com/x")
-        assert isinstance(module._classify(error, X_PROFILE), NoVideoInPost)
+        assert isinstance(module._classify(error, TWITTER_PROFILE), NoVideoInPost)
 
 
 class TestCookiesAreACopy:
@@ -584,7 +585,7 @@ class TestCookiesAreACopy:
         cookies = CookieSession(export)
 
         scratch = tmp_path / "req-1"
-        options = module.YtDlpDownloader(X_PROFILE, cookies=cookies)._options(
+        options = module.YtDlpDownloader(TWITTER_PROFILE, cookies=cookies)._options(
             scratch, lambda s: None
         )
 
@@ -595,7 +596,7 @@ class TestCookiesAreACopy:
         assert Path(options["cookiefile"]).read_text() == "netscape"
 
     def test_without_cookies_the_option_is_absent_rather_than_empty(self, tmp_path: Path) -> None:
-        options = module.YtDlpDownloader(X_PROFILE)._options(tmp_path, lambda s: None)
+        options = module.YtDlpDownloader(TWITTER_PROFILE)._options(tmp_path, lambda s: None)
         assert "cookiefile" not in options
 
 

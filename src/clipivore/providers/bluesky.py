@@ -1,4 +1,4 @@
-"""Bluesky, the first platform this bot learned after X.
+"""Bluesky, the first platform this bot learned after Twitter.
 
 One link shape, no wrapper: ``bsky.app/profile/<handle>/post/<rkey>``, where the
 handle is either a domain-ish name (``alice.bsky.social``) or a raw
@@ -25,7 +25,7 @@ from clipivore.services.downloader import EngineProfile, YtDlpDownloader
 from clipivore.services.providers import Provider, ProviderContext
 
 # The rkey is the part the post is keyed on. The handle is as loose as Bluesky
-# allows — a DID carries colons — while the tail matches X's: it stops at
+# allows — a DID carries colons — while the tail matches Twitter's: it stops at
 # whitespace and at a comma, because that is how two links arrive glued together
 # in forwarded text.
 _POST_LINK = re.compile(

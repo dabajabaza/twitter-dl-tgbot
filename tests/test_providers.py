@@ -88,9 +88,9 @@ class TestWhatCountsAsAProvider:
         assert empty.choices == []
         assert empty.extract("https://x.com/a/status/1") == []
 
-    def test_the_real_package_holds_at_least_x(self) -> None:
+    def test_the_real_package_holds_at_least_twitter(self) -> None:
         names = {choice.name for choice in ProviderCatalog().ready}
-        assert "X" in names
+        assert "Twitter" in names
 
 
 class TestBrokenProvidersAreVisibleNotFatal:
@@ -128,7 +128,7 @@ class TestBrokenProvidersAreVisibleNotFatal:
 
     def test_a_provider_that_built_badly_still_claims_its_links(self) -> None:
         # The whole point of declaring patterns on the class: the person gets
-        # "X is misconfigured" instead of the silence an unknown link earns.
+        # "Twitter is misconfigured" instead of the silence an unknown link earns.
         links = catalog().extract("https://broken.example/12")
         assert [link.choice.provider_id for link in links] == ["misconfigured"]
         assert not links[0].choice.ready
