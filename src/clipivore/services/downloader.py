@@ -64,6 +64,11 @@ _NETWORK_MARKERS = (
 # somebody else's site. Every Provider gets this one for free, because every
 # Provider has the allowlist.
 _ENGINE_NO_VIDEO_MARKERS = ("unsupported url", "no suitable extractor")
+# A 5xx is the platform's machinery failing, not the post being gone. Checked
+# with the network markers and before any platform's own words, because HTTP
+# reason phrases collide with them: "503 Service Unavailable" reads as
+# "unavailable" and would otherwise tell somebody their post was deleted.
+_SERVER_ERROR = re.compile(r"http error 5\d\d")
 
 
 def _unchanged(text: str) -> str:
@@ -72,6 +77,10 @@ def _unchanged(text: str) -> str:
 
 def _no_profile(handle: str) -> str:
     return ""
+
+
+def _no_post_id(url: str) -> str | None:
+    return None
 
 
 @dataclass(frozen=True)
@@ -100,6 +109,11 @@ class EngineProfile:
     clean_description: Callable[[str], str] = field(default=_unchanged)
     # The author's profile URL, when the extractor did not supply one.
     profile_url: Callable[[str], str] = field(default=_no_profile)
+    # The post id read straight off the link, for platforms whose extractor
+    # reports the id of something else. A quote post is the case that forces
+    # this: its metadata describes the post being quoted, so without this the
+    # external file name carries an id the sender never saw (D7).
+    post_id_from_url: Callable[[str], str | None] = field(default=_no_post_id)
 
 
 class _Abandoned(Exception):
@@ -391,7 +405,7 @@ def _clip_from_entry(entry: dict[str, Any], url: str, profile: EngineProfile) ->
         return None
     return Clip(
         path=path,
-        post_id=_post_id(entry),
+        post_id=profile.post_id_from_url(url) or _post_id(entry),
         uploader=str(entry.get("uploader_id") or entry.get("uploader") or "unknown"),
         upload_date=_upload_date(entry),
         description=_description(entry, profile),
@@ -414,12 +428,14 @@ def _uploader_url(entry: dict[str, Any], profile: EngineProfile) -> str:
 
 
 def _post_id(entry: dict[str, Any]) -> str:
-    """The id from the link, not the id of the media inside it.
+    """The id the extractor reports, used when the Provider reads none from the link.
 
     The X extractor puts the media object's id in `id` and the post's own id in
     `display_id`; an extractor with nothing to disambiguate sets only `id`, and
-    that is the post's. External names must be discoverable from the original
-    link (ARCHITECTURE.md D7), or they are not a useful index.
+    that is usually the post's. External names must be discoverable from the
+    original link (ARCHITECTURE.md D7), or they are not a useful index — which
+    is why `EngineProfile.post_id_from_url` takes precedence where an extractor
+    can report the id of a different post entirely.
     """
     return str(entry.get("display_id") or entry.get("id") or "unknown")
 
@@ -468,7 +484,7 @@ def _classify(exc: Exception, profile: EngineProfile) -> Exception:
     """
     detail = str(exc)
     text = _strip_login_hint(detail).lower()
-    if any(marker in text for marker in _NETWORK_MARKERS):
+    if any(marker in text for marker in _NETWORK_MARKERS) or _SERVER_ERROR.search(text):
         return NetworkUnavailable(detail)
     if any(marker in text for marker in profile.account_state_markers):
         return PostUnavailable(detail)

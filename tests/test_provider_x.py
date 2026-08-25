@@ -14,11 +14,12 @@ from clipivore.providers.x import _ALLOWED_HOSTS, XProvider
 from clipivore.services.providers import ProviderCatalog, ProviderContext, ProviderState
 from clipivore.services.redirects import follow
 
-CATALOG = ProviderCatalog(ProviderContext())
-
 
 def extract_links(*sources: str | None) -> list[str]:
-    return [link.url for link in CATALOG.extract(*sources)]
+    # Built per call rather than at import: a module-level catalog is
+    # constructed at collection time, before the hermetic-settings fixture
+    # can empty the environment it reads.
+    return [link.url for link in ProviderCatalog(ProviderContext()).extract(*sources)]
 
 
 def is_tweet_link(url: str) -> bool:

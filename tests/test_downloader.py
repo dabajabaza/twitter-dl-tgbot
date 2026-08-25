@@ -466,6 +466,71 @@ class TestClipsFromInfo:
         assert clips[0].uploader_url == ""
 
 
+class TestTransportFailuresAreNotThePlatformsFault:
+    """A 5xx says the platform's machinery broke, not that the post is gone."""
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Unable to download JSON metadata: HTTP Error 503: Service Unavailable",
+            "Unable to download JSON metadata: HTTP Error 502: Bad Gateway",
+            "HTTP Error 500: Internal Server Error",
+        ],
+    )
+    def test_a_server_error_reads_as_the_network_not_as_a_missing_post(self, message: str) -> None:
+        # "503 Service Unavailable" contains the word "unavailable", so before
+        # this it told somebody their post had been deleted every time the API
+        # hiccupped.
+        assert isinstance(module._classify(DownloadError(message), X_PROFILE), NetworkUnavailable)
+
+    def test_a_4xx_is_still_left_to_the_platform_to_explain(self) -> None:
+        # Only 5xx: a 4xx is about this request, and the platform's own markers
+        # are what read it.
+        error = DownloadError("HTTP Error 404: Not Found")
+        assert isinstance(module._classify(error, X_PROFILE), PostUnavailable)
+
+
+class TestTheIdInAnExternalNameComesFromTheLink:
+    """D7: a stored clip has to be findable from the link somebody sent."""
+
+    def test_a_provider_that_reads_the_id_itself_overrides_the_extractor(
+        self, tmp_path: Path
+    ) -> None:
+        # A Bluesky quote post reports the *quoted* post's id, so the file would
+        # otherwise be named after a post the sender never saw.
+        video = tmp_path / "quoted.mp4"
+        video.write_bytes(b"x")
+        entry = {
+            "id": "3l3vgf77uco2g",  # the quoted post
+            "uploader_id": "bsky.app",
+            "upload_date": "20240911",
+            "requested_downloads": [{"filepath": str(video)}],
+        }
+        profile = module.EngineProfile(
+            allowed_extractors=("bluesky",),
+            post_id_from_url=lambda url: "3l6oe5mtr2c2j",
+        )
+
+        clips = module._clips_from_info(entry, "https://bsky.app/…/post/3l6oe5mtr2c2j", profile)
+
+        assert clips[0].post_id == "3l6oe5mtr2c2j"
+
+    def test_without_the_hook_the_extractor_still_decides(self, tmp_path: Path) -> None:
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"x")
+        entry = {
+            "id": "media-1",
+            "display_id": "1234567890",
+            "uploader_id": "someone",
+            "upload_date": "20260813",
+            "requested_downloads": [{"filepath": str(video)}],
+        }
+
+        clips = clips_from_info(entry, TWEET)
+
+        assert clips[0].post_id == "1234567890"
+
+
 class TestEveryProviderStaysOnItsOwnPlatform:
     """One platform's post is the only thing its Provider may download.
 
