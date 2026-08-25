@@ -1,8 +1,8 @@
-"""X, the platform this bot was built for.
+"""Twitter, the platform this bot was built for.
 
 Two link shapes arrive in practice: the direct one
 (``x.com/<user>/status/<id>``, plus the twitter.com and mobile. spellings that
-still circulate) and the wrapped one (``t.co/<slug>``, which the X apps produce
+still circulate) and the wrapped one (``t.co/<slug>``, which the Twitter apps produce
 and which says nothing about its target until followed).
 """
 
@@ -19,7 +19,7 @@ from clipivore.services.downloader import EngineProfile, YtDlpDownloader
 from clipivore.services.providers import Provider, ProviderContext
 from clipivore.services.redirects import follow
 
-# The username part is deliberately loose (X caps handles at 15 chars, but
+# The username part is deliberately loose (Twitter caps handles at 15 chars, but
 # `i/web` and `i/status` are also valid prefixes) while the id is strictly
 # numeric — that is the part we key on. A trailing photo/video segment, query
 # string or fragment is common in shared links and kept.
@@ -36,7 +36,7 @@ _POST_LINK = re.compile(
 _SHORT_LINK = re.compile(r"https?://t\.co/[A-Za-z0-9]+", re.IGNORECASE)
 
 # Every hop of a t.co redirect must land on one of these. Since the only thing
-# worth following is a post on X, anything else is refused *before* the request
+# worth following is a post on Twitter, anything else is refused *before* the request
 # is made (see services/redirects.py for why that ordering matters).
 _ALLOWED_HOSTS = frozenset(
     {
@@ -52,15 +52,15 @@ _ALLOWED_HOSTS = frozenset(
     }
 )
 
-# X appends a t.co pointer to the post's own media at the end of the text; in a
+# Twitter appends a t.co pointer to the post's own media at the end of the text; in a
 # caption that link only duplicates the one the footer already carries. Both
 # schemes occur in the wild. Only a *trailing* run is stripped — a t.co in the
 # middle of a sentence is part of what the author said.
 _TRAILING_TCO = re.compile(r"(?:\s*https?://t\.co/[A-Za-z0-9]+)+\s*$")
 
 
-class XSettings(BaseSettings):
-    """X's own configuration.
+class TwitterSettings(BaseSettings):
+    """Twitter's own configuration.
 
     ``COOKIES_FILE`` keeps its bare, unprefixed name on purpose: it is already
     set in the deployed env file, which is hand-managed on a host this
@@ -79,7 +79,7 @@ class XSettings(BaseSettings):
         default=None,
         alias="COOKIES_FILE",
         description=(
-            "Netscape-format cookies.txt of the owner's X session. Without it only public "
+            "Netscape-format cookies.txt of the owner's Twitter session. Without it only public "
             "posts download: no NSFW, no age-gated, no protected accounts"
         ),
     )
@@ -99,7 +99,7 @@ class XSettings(BaseSettings):
         return value
 
 
-# What the shared engine needs to know about X. A description of the platform,
+# What the shared engine needs to know about Twitter. A description of the platform,
 # not of this installation — so it is built once here rather than per instance,
 # and reading it costs no configuration.
 PROFILE = EngineProfile(
@@ -140,20 +140,20 @@ PROFILE = EngineProfile(
 )
 
 
-class XProvider(Provider):
-    name: ClassVar[str] = "X"
-    hint: ClassVar[str] = "x.com/<user>/status/<id> — t.co short links work too"
+class TwitterProvider(Provider):
+    name: ClassVar[str] = "Twitter"
+    hint: ClassVar[str] = "twitter.com/<user>/status/<id> — x.com and t.co links work too"
     post_link: ClassVar[re.Pattern[str]] = _POST_LINK
     short_link: ClassVar[re.Pattern[str] | None] = _SHORT_LINK
 
     def __init__(self, context: ProviderContext) -> None:
-        settings = XSettings()
+        settings = TwitterSettings()
         cookies_file = settings.cookies_file
         if cookies_file is not None and cookies_file.is_dir():
             # yt-dlp would try to read cookies out of a directory on every
-            # download. Raising here makes X misconfigured rather than killing
+            # download. Raising here makes Twitter misconfigured rather than killing
             # the bot: it is named in /help and in the refusal, and any other
-            # Provider keeps working. If X is the only one installed, though,
+            # Provider keeps working. If Twitter is the only one installed, though,
             # "every Provider is broken" is still fatal at startup — see D18.
             raise ValueError(f"COOKIES_FILE must be a file, got directory {cookies_file}")
         self.cookies = CookieSession(cookies_file)
@@ -174,7 +174,7 @@ class XProvider(Provider):
             is_target=lambda candidate: bool(_POST_LINK.match(candidate)),
             find_targets=_posts_in,
             proxy=self._proxy,
-            outside_message=f"{url} leads outside X",
+            outside_message=f"{url} leads outside Twitter",
         )
 
 

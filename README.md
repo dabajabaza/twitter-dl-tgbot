@@ -1,7 +1,7 @@
 # clipivore-tgbot
 
 A personal Telegram bot: send it a link to a post and get the video from it, at
-the best quality available. X and Bluesky are built in; another Provider is one
+the best quality available. Twitter and Bluesky are built in; another Provider is one
 file more. Downloads run through `yt-dlp` under the
 owner's own cookies, so NSFW, age-gated and protected accounts the owner
 follows are all reachable.
@@ -18,7 +18,7 @@ real account, one uplink.
 - Several links in one message, and several clips in one post, are all handled
   in turn.
 - A clip up to 50 MB (the Bot API ceiling) arrives in the chat, captioned with
-  the post's text and a footer — `@author · Open in X` — linking the author's
+  the post's text and a footer — `@author · Open in Twitter` — linking the author's
   profile and the post. Once everything a message asked for arrived, the
   message with the link is deleted; any failure leaves it in place. Delivery of
   larger clips is optional: the owner can switch between the configured
@@ -165,7 +165,7 @@ The automated tests never touch the network, so the Provider → yt-dlp → Tele
 chain is only ever exercised by a person. With a test token:
 
 1. An ordinary post with a video → the clip arrives, captioned with the post's
-   text and a footer whose `@author` opens the profile and whose "Open in X"
+   text and a footer whose `@author` opens the profile and whose "Open in Twitter"
    opens the post; the message with the link disappears.
 2. A post with several clips → all of them arrive, and the status message
    disappears after the last one.
@@ -185,14 +185,14 @@ chain is only ever exercised by a person. With a test token:
    and the message stays.
 11. Remove or break the selected Adapter → small clips still arrive, and a large
    one names the missing or misconfigured Overflow destination.
-12. Point `COOKIES_FILE` at a directory → X is reported misconfigured in the
-   log, the bot starts anyway, `/help` lists X as unavailable, and an X link is
+12. Point `COOKIES_FILE` at a directory → Twitter is reported misconfigured in the
+   log, the bot starts anyway, `/help` lists Twitter as unavailable, and a Twitter link is
    refused by name while Bluesky keeps working. Remove the Bluesky module too
    and the bot refuses to start at all: with no Provider left there is nothing
    it could do, and idling healthily would hide that.
 13. A valid but stale `COOKIES_FILE` plus an NSFW post → one alert to the owner
    naming the Provider, a polite refusal to whoever asked.
-14. Proxy switched off for a minute → "Can't reach X right now", and the bot
+14. Proxy switched off for a minute → "Can't reach Twitter right now", and the bot
    neither hangs nor dies.
 
 ## Operations

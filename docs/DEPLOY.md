@@ -56,7 +56,7 @@ install -d -o twitterdl -g twitterdl -m 700 /var/tmp/twitter-dl
 install -m 600 -o twitterdl /dev/null /usr/local/etc/twitter-dl.env
 # fill it in following .env.example
 
-# X cookies: export cookies.txt from the browser, copy it to the server
+# Twitter cookies: export cookies.txt from the browser, copy it to the server
 install -m 600 -o twitterdl cookies.txt /usr/local/etc/twitter-dl-cookies.txt
 ```
 

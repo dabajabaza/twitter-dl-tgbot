@@ -1,10 +1,10 @@
 # Discover providers by scanning the providers package
 
 A *Provider* is a platform the bot can download from. Until now there was
-exactly one, X, spelled out in three unrelated places: the link regexes and host
+exactly one, Twitter, spelled out in three unrelated places: the link regexes and host
 allowlist in `services/links.py`, the extractor lock and error-marker tables in
-`services/downloader.py`, and the word "X" in a dozen strings in `bot/texts.py`.
-Adding Bluesky meant editing all three and hoping none of X's assumptions leaked
+`services/downloader.py`, and the word "Twitter" in a dozen strings in `bot/texts.py`.
+Adding Bluesky meant editing all three and hoping none of Twitter's assumptions leaked
 across.
 
 Providers are now discovered the way Overflow Adapters are
@@ -24,7 +24,7 @@ Three things differ from the Adapters, each for a reason:
 settings are wholly its own, so zero-arg construction costs nothing. A Provider
 needs the single outbound hop this deployment uses, which the bot has already
 parsed (ARCHITECTURE.md D6) and which no Provider should re-derive. Everything
-else a Provider needs it still reads itself, from its own environment — X keeps
+else a Provider needs it still reads itself, from its own environment — Twitter keeps
 the bare, unprefixed `COOKIES_FILE` name because that line already exists in the
 hand-managed env file on the server, and a tidier spelling would have silently
 turned authenticated downloads off on the next deploy.
@@ -36,7 +36,7 @@ enum has no `MISSING`: nothing stored can point at a module that went away.
 
 **Link patterns are class attributes, so a broken Provider still claims its
 links.** A Provider whose construction failed can still be recognised by the
-patterns declared on its class, and its links get an explicit "X is
+patterns declared on its class, and its links get an explicit "Twitter is
 misconfigured" verdict. Without that they would fall to the no-link answer, and
 a platform the bot knows about would be indistinguishable from one it never
 heard of. A module that failed to *import* has no readable patterns and cannot

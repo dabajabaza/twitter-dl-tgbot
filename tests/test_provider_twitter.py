@@ -1,4 +1,4 @@
-"""X as a Provider: the link shapes it claims, and the t.co guard.
+"""Twitter as a Provider: the link shapes it claims, and the t.co guard.
 
 The redirect tests assert on *which URLs were requested*, not only on the
 exception: the guard under test is "the bot never even asks".
@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from clipivore.errors import NotAPostLink
-from clipivore.providers.x import _ALLOWED_HOSTS, XProvider
+from clipivore.providers.twitter import _ALLOWED_HOSTS, TwitterProvider
 from clipivore.services.providers import ProviderCatalog, ProviderContext, ProviderState
 from clipivore.services.redirects import follow
 
@@ -23,19 +23,19 @@ def extract_links(*sources: str | None) -> list[str]:
 
 
 def is_tweet_link(url: str) -> bool:
-    return bool(XProvider.post_link.match(url))
+    return bool(TwitterProvider.post_link.match(url))
 
 
 def is_short_link(url: str) -> bool:
-    return XProvider.is_short(url)
+    return TwitterProvider.is_short(url)
 
 
 def tweet_id(url: str) -> str | None:
-    return XProvider.post_id(url)
+    return TwitterProvider.post_id(url)
 
 
 async def resolve_short_link(url: str, *, proxy: str | None = None) -> str:
-    return await XProvider(ProviderContext(proxy=proxy)).resolve(url)
+    return await TwitterProvider(ProviderContext(proxy=proxy)).resolve(url)
 
 
 @pytest.mark.parametrize(
@@ -51,7 +51,7 @@ async def resolve_short_link(url: str, *, proxy: str | None = None) -> str:
         "https://x.com/i/web/status/1234567890",
     ],
 )
-def test_every_spelling_of_an_x_post_link_in_the_wild_is_recognised(url: str) -> None:
+def test_every_spelling_of_a_twitter_post_link_in_the_wild_is_recognised(url: str) -> None:
     assert extract_links(url) == [url]
     assert is_tweet_link(url)
 
@@ -197,12 +197,12 @@ TWEET = "https://x.com/someone/status/1234567890"
 
 
 class TestShortLinkResolution:
-    """t.co points wherever the tweet's author decided — including inward."""
+    """t.co points wherever the post's author decided — including inward."""
 
-    async def test_a_link_that_is_not_even_on_x_is_never_requested(
+    async def test_a_link_that_is_not_even_on_twitter_is_never_requested(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Straight at the follower with X's allowlist: nothing outside it may be
+        # Straight at the follower with Twitter's allowlist: nothing outside it may be
         # fetched even as the *entry* URL. The Provider only ever hands it a
         # claimed t.co link, so this is the belt under the braces.
         http = RecordingHttp([Hop()]).install(monkeypatch)
@@ -213,7 +213,7 @@ class TestShortLinkResolution:
                 allowed_hosts=_ALLOWED_HOSTS,
                 is_target=is_tweet_link,
                 find_targets=lambda text: [],
-                outside_message="leads outside X",
+                outside_message="leads outside Twitter",
             )
 
         assert http.requested == []
@@ -254,7 +254,7 @@ class TestShortLinkResolution:
 
         assert await resolve_short_link("https://t.co/AbC123") == TWEET
 
-    async def test_a_chain_of_hops_inside_x_is_followed_to_the_tweet(
+    async def test_a_chain_of_hops_inside_twitter_is_followed_to_the_post(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         http = RecordingHttp(
@@ -297,7 +297,9 @@ class TestShortLinkResolution:
 
         assert http.requested == ["https://t.co/AbC123"]
 
-    async def test_a_redirect_loop_inside_x_gives_up(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_a_redirect_loop_inside_twitter_gives_up(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         http = RecordingHttp([Hop(status=301, location="https://t.co/Loop")]).install(monkeypatch)
 
         with pytest.raises(NotAPostLink):
@@ -319,22 +321,22 @@ class TestShortLinkResolution:
             await resolve_short_link("https://t.co/AbC123")
 
 
-class TestXsOwnConfiguration:
-    def test_a_cookies_path_that_is_a_directory_disables_x_rather_than_the_bot(
+class TestTwittersOwnConfiguration:
+    def test_a_cookies_path_that_is_a_directory_disables_twitter_rather_than_the_bot(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         # yt-dlp would try to read cookies out of a directory on every single
-        # download. Before Providers this refused to start at all; now it is X
+        # download. Before Providers this refused to start at all; now it is Twitter
         # that is unavailable, named as such, while anything else keeps working.
         monkeypatch.setenv("COOKIES_FILE", str(tmp_path))
         catalog = ProviderCatalog(ProviderContext())
 
-        x = catalog.get("x")
-        assert x is not None
-        assert x.state is ProviderState.MISCONFIGURED
-        assert "must be a file" in x.error
-        # Still recognises its own links, so the refusal can name X.
-        assert x.claims(TWEET)
+        twitter = catalog.get("twitter")
+        assert twitter is not None
+        assert twitter.state is ProviderState.MISCONFIGURED
+        assert "must be a file" in twitter.error
+        # Still recognises its own links, so the refusal can name Twitter.
+        assert twitter.claims(TWEET)
 
     def test_an_empty_cookies_setting_means_no_session_not_the_current_directory(
         self, monkeypatch: pytest.MonkeyPatch
@@ -342,7 +344,7 @@ class TestXsOwnConfiguration:
         # `.env.example` invites `NAME=` for optional settings, and an empty
         # string becomes Path('.') — a directory, i.e. the case above.
         monkeypatch.setenv("COOKIES_FILE", "   ")
-        provider = XProvider(ProviderContext())
+        provider = TwitterProvider(ProviderContext())
 
         assert provider.cookies is not None
         assert provider.cookies.source is None

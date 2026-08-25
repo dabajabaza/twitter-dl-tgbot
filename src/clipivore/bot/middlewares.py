@@ -1,6 +1,6 @@
 """Who the bot talks to at all.
 
-Every download runs under the owner's X account, so the guest list is short,
+Every download runs under the owner's Twitter account, so the guest list is short,
 static, and lives in the environment rather than in a database — there is no
 sign-up flow to store (see docs/ARCHITECTURE.md D1).
 """

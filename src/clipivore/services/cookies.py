@@ -1,4 +1,4 @@
-"""The owner's X session, kept where yt-dlp cannot damage it.
+"""The owner's Twitter session, kept where yt-dlp cannot damage it.
 
 yt-dlp rewrites whatever cookie file it is handed — ``YoutubeDL.__exit__`` calls
 ``save_cookies()``, which rewrites the file after *every* run, successful or

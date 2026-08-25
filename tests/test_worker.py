@@ -43,7 +43,7 @@ from tests.helpers.factories import (
 )
 
 # The name make_provider_choice gives its Provider; every verdict quotes it.
-PROVIDER_NAME = "X"
+PROVIDER_NAME = "Twitter"
 
 TWEET = "https://x.com/someone/status/1234567890"
 
@@ -646,7 +646,7 @@ class TestOwnerAlerts:
         first = make_provider_choice(
             downloader=FakeDownloader(),
             provider_id="x",
-            name="X",
+            name="Twitter",
             cookies=CookieSession(first_export),
         )
         second = make_provider_choice(
@@ -664,7 +664,7 @@ class TestOwnerAlerts:
 
         sent = harness.session.calls_of(SendMessage)
         assert len(sent) == 2
-        assert [("X" in call.text, "Other" in call.text) for call in sent] == [
+        assert [("Twitter" in call.text, "Other" in call.text) for call in sent] == [
             (True, False),
             (False, True),
         ]
@@ -827,7 +827,7 @@ class TestTheWorkerGoesThroughTheProviderToResolve:
     ) -> None:
         provider = make_provider_choice(
             downloader=FakeDownloader(),
-            resolve=_raising(NotAPostLink("leads outside X")),
+            resolve=_raising(NotAPostLink("leads outside Twitter")),
         )
         worker = build_worker(harness, settings)
 

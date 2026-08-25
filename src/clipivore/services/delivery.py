@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # API call, so this overrides the session-wide request timeout for that one call.
 _UPLOAD_TIMEOUT_S = 600
 # Dots are excluded along with the obvious separators: the metadata comes from
-# X by way of yt-dlp, and a handle of "../.." must not be able to say anything
+# Twitter by way of yt-dlp, and a handle of "../.." must not be able to say anything
 # about a path once it is pasted after the remote's name.
 _UNSAFE_IN_FILENAME = re.compile(r"[^A-Za-z0-9_-]+")
 _EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,5}")

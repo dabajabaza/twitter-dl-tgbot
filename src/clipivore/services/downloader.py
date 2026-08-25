@@ -276,7 +276,7 @@ class YtDlpDownloader:
 
         options: dict[str, Any] = {
             # yt-dlp's own default selector. The `/b` fallback is what carries
-            # X's animated GIFs, which are audio-less mp4 and so never satisfy
+            # Twitter's animated GIFs, which are audio-less mp4 and so never satisfy
             # the `bv*+ba` half.
             "format": "bv*+ba/b",
             "merge_output_format": "mp4",
@@ -336,7 +336,7 @@ def ffmpeg_available() -> bool:
     """Whether merging separate video and audio streams is possible.
 
     Without ffmpeg yt-dlp silently falls back to a single progressive stream,
-    which on X means capping quality below what the account can actually see —
+    which on Twitter means capping quality below what the account can actually see —
     exactly the complaint this bot exists to answer.
     """
     return shutil.which("ffmpeg") is not None
@@ -359,9 +359,9 @@ def _stream_kind(status: dict[str, Any]) -> str:
 
     With the ``bv*+ba`` selector the video and audio streams download as two
     files and the hook reports each separately; the single-file ``/b``
-    fallback (X GIFs, no ffmpeg) carries both codecs and gets no name.
+    fallback (Twitter GIFs, no ffmpeg) carries both codecs and gets no name.
 
-    The audio half is recognised by ``vcodec == "none"`` alone: X's audio
+    The audio half is recognised by ``vcodec == "none"`` alone: Twitter's audio
     renditions come from an HLS ``EXT-X-MEDIA`` entry, for which yt-dlp fills
     ``vcodec`` but never sets ``acodec`` at all — keying on ``acodec`` would
     leave the second run of the percentage nameless on every real clip.
@@ -430,7 +430,7 @@ def _uploader_url(entry: dict[str, Any], profile: EngineProfile) -> str:
 def _post_id(entry: dict[str, Any]) -> str:
     """The id the extractor reports, used when the Provider reads none from the link.
 
-    The X extractor puts the media object's id in `id` and the post's own id in
+    The Twitter extractor puts the media object's id in `id` and the post's own id in
     `display_id`; an extractor with nothing to disambiguate sets only `id`, and
     that is usually the post's. External names must be discoverable from the
     original link (ARCHITECTURE.md D7), or they are not a useful index — which

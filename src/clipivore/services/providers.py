@@ -1,6 +1,6 @@
 """Providers: the platforms this bot can download from, and how they are found.
 
-A *Provider* is one platform — X, Bluesky. A module in the providers package IS
+A *Provider* is one platform — Twitter, Bluesky. A module in the providers package IS
 a Provider: the file name is its stable id, and its one concrete `Provider`
 subclass is the implementation. That mirrors the Overflow Adapters exactly
 (docs/adr/0002), for the same reason: adding one should be writing a file, not
@@ -60,7 +60,7 @@ class Provider(ABC):
     to *serve* a link is an instance concern.
     """
 
-    #: What the bot's replies call this platform. "X", "Bluesky".
+    #: What the bot's replies call this platform. "Twitter", "Bluesky".
     name: ClassVar[str]
     #: One line for /help, naming the link shapes a person can send.
     hint: ClassVar[str]
