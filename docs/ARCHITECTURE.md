@@ -520,10 +520,9 @@ produces. Bluesky's are worse than they look: the XRPC API reports a deleted,
 blocked or deactivated post as HTTP 400 with the reason in a JSON body that
 yt-dlp discards, and a thread marked `notFoundPost` reaches the extractor as a
 bare `KeyError`, arriving as "an extractor error has occurred … please report
-this issue". Neither carries a word this bot could match on. Separately, a quote
-post pairing an external link card with the quoted post's own video builds a
-playlist whose first entry is the card; the extractor lock (D15) refuses it, and
-yt-dlp abandons the playlist before reaching the video.
+this issue". Neither carries a word this bot could match on. *(The second limitation this decision recorded — a quote post that also links
+out losing its video to the extractor lock — has since been fixed: the engine
+drops unreachable pointers before processing the playlist. See D20.)*
 
 **Decision.** Say so, in the Provider, rather than shipping marker tables that
 appear to handle states they cannot see. Bluesky's `account_state_markers` is
@@ -536,9 +535,41 @@ the change that introduced the Provider.
 **Consequences.** A deleted Bluesky post is answered with "Download failed. The
 details are in the bot's log" instead of "that post may be deleted", and the log
 line invites a yt-dlp bug report that should not be filed. That is a worse
-message, not a wrong download, and it is visible rather than disguised. The
-quote-post case is narrow: a record carries exactly one embed, so it needs a
-quote post specifically.
+message, not a wrong download, and it is visible rather than disguised.
 
 **Revisit when** either fix above is worth its own change — the body-reading one
 also removes the 5xx guesswork the engine currently does with reason phrases.
+
+---
+
+## D20. One unreachable entry must not cost the post its video
+
+**Context.** A post that quotes another post *and* carries an outbound link
+reaches the engine as a playlist: the quoted post's video, then a bare pointer
+at the linked site. The extractor lock (D15) refuses the pointer, which is
+exactly its job. But yt-dlp treats one entry's refusal as the playlist's and
+raises, discarding the video it had already fetched. The taxonomy then read
+"No suitable extractor found" as `NoVideoInPost`, so the person was told the
+post had no video in it — while the downloaded file sat in the scratch
+directory waiting to be deleted. A wasted download and an untrue answer.
+
+Both platforms produce the shape, and both need a quote post to do it: on
+Twitter the extractor only appends an outbound URL when the post has no media
+of its own, and a Bluesky record carries exactly one embed.
+
+**Decision.** Extract the playlist skeleton first (`process=False`), drop the
+entries that only point at something no enabled extractor may visit, then
+process what remains. A pointer at one of the platform's *own* sibling
+extractors is kept — following that is legitimate, and the lock already allows
+it. Dropping every entry is not an error: a post whose only content is an
+outbound link genuinely has no video, and still says so.
+
+**Consequences.** The quoted post's video is delivered instead of thrown away.
+The scope guard is untouched — nothing forbidden is fetched, it is simply
+declined before it can take a sibling entry down with it. The cost is one extra
+metadata pass per download, and the two phases share a `YoutubeDL` instance, so
+the size ceiling, the match filter and the progress hooks behave as before.
+
+**Revisit when** an entry needs to be dropped for some reason other than being
+out of the lock's reach — that would be a filter with a policy in it, and this
+one deliberately has none.

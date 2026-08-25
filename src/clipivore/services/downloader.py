@@ -247,7 +247,10 @@ class YtDlpDownloader:
             with YoutubeDL(
                 self._options(dest, hook, max_bytes=max_bytes, limit_hit=limit_hit)
             ) as ydl:
-                return ydl.extract_info(url, download=True)
+                # Two passes, so one unreachable entry cannot take the post's
+                # own video down with it. See _without_foreign_entries.
+                skeleton = ydl.extract_info(url, download=False, process=False)
+                return ydl.process_ie_result(_without_foreign_entries(ydl, skeleton), download=True)
         except Exception:
             # Whatever yt-dlp wrapped our _Abandoned in, the request is already
             # gone and nobody is waiting for this result.
@@ -310,6 +313,46 @@ class YtDlpDownloader:
         if self._proxy is not None:
             options["proxy"] = self._proxy
         return options
+
+
+def _without_foreign_entries(ydl: YoutubeDL, skeleton: Any) -> Any:
+    """Drop playlist entries that only point at a site this Provider may not visit.
+
+    A post that quotes another post and also carries an outbound link becomes a
+    playlist: the quoted post's video, then a bare pointer at the linked site.
+    The extractor lock (D15) refuses that pointer, which is the whole point of
+    it — but yt-dlp treats one entry's refusal as the playlist's, and abandons
+    the video it had already fetched. The person is then told the post has no
+    video in it while the file sits in the scratch directory, which is the worst
+    of both: a wasted download and an answer that is not true.
+
+    So the pointers are removed before anything is processed. A pointer at
+    something the lock *does* allow — one of the platform's own sibling
+    extractors — is kept, because following it is legitimate.
+    """
+    if not isinstance(skeleton, dict) or skeleton.get("_type") != "playlist":
+        return skeleton
+    entries = list(skeleton.get("entries") or ())
+    kept = [entry for entry in entries if not _points_out_of_reach(ydl, entry)]
+    if len(kept) == len(entries):
+        return skeleton
+    logger.info(
+        "dropped %d entr%s pointing outside this provider's extractors",
+        len(entries) - len(kept),
+        "y" if len(entries) - len(kept) == 1 else "ies",
+    )
+    return {**skeleton, "entries": kept}
+
+
+def _points_out_of_reach(ydl: YoutubeDL, entry: Any) -> bool:
+    if not isinstance(entry, dict) or entry.get("_type") not in ("url", "url_transparent"):
+        return False
+    url = entry.get("url")
+    if not url:
+        return True
+    return not any(
+        extractor.suitable(url) for name, extractor in ydl._ies.items() if name.lower() != "generic"
+    )
 
 
 def _exact_selected_size(info: dict[str, Any]) -> int | None:

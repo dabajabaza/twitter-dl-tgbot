@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from yt_dlp import YoutubeDL
 from yt_dlp.extractor.common import InfoExtractor
 from yt_dlp.utils import DownloadError
 
@@ -530,6 +531,71 @@ class TestTheIdInAnExternalNameComesFromTheLink:
         clips = clips_from_info(entry, TWEET)
 
         assert clips[0].post_id == "1234567890"
+
+
+class TestOneUnreachableEntryDoesNotLoseThePostsVideo:
+    """A quote post that also links out builds a two-entry playlist.
+
+    yt-dlp treats one entry's refusal as the whole playlist's, so the extractor
+    lock refusing the outbound pointer used to discard the video already
+    fetched from the quoted post — and the person was told the post had no
+    video in it while the file sat in the scratch directory.
+    """
+
+    def _ydl(self, tmp_path: Path) -> "YoutubeDL":
+        options = engine_of(
+            next(c for c in ProviderCatalog(ProviderContext()).ready if c.name == "Twitter")
+        )._options(tmp_path, lambda status: None)
+        return YoutubeDL({**options, "logger": None})
+
+    def test_a_pointer_at_a_forbidden_site_is_dropped(self, tmp_path: Path) -> None:
+        skeleton = {
+            "_type": "playlist",
+            "entries": [
+                {"id": "native", "title": "the quoted post's video"},
+                {"_type": "url", "url": "https://player.vimeo.com/video/551578322"},
+            ],
+        }
+        with self._ydl(tmp_path) as ydl:
+            kept = module._without_foreign_entries(ydl, skeleton)
+
+        assert [entry.get("id") for entry in kept["entries"]] == ["native"]
+
+    def test_a_pointer_at_the_platforms_own_extractor_is_kept(self, tmp_path: Path) -> None:
+        # Dropping these would break legitimate hand-offs between a platform's
+        # sibling extractors — the lock allows them, so they stay.
+        skeleton = {
+            "_type": "playlist",
+            "entries": [{"_type": "url", "url": "https://x.com/someone/status/1234567890"}],
+        }
+        with self._ydl(tmp_path) as ydl:
+            kept = module._without_foreign_entries(ydl, skeleton)
+
+        assert len(kept["entries"]) == 1
+
+    def test_a_pointer_with_no_url_at_all_is_dropped(self, tmp_path: Path) -> None:
+        skeleton = {"_type": "playlist", "entries": [{"_type": "url"}]}
+        with self._ydl(tmp_path) as ydl:
+            assert module._without_foreign_entries(ydl, skeleton)["entries"] == []
+
+    def test_a_single_video_is_passed_through_untouched(self, tmp_path: Path) -> None:
+        info = {"id": "1234567890", "title": "one video, no playlist"}
+        with self._ydl(tmp_path) as ydl:
+            assert module._without_foreign_entries(ydl, info) is info
+
+    def test_a_post_that_is_only_an_outbound_link_still_says_no_video(self, tmp_path: Path) -> None:
+        # Everything dropped is not an error — it is a post with nothing of its
+        # own in it, which is what the person should be told.
+        skeleton = {
+            "_type": "playlist",
+            "entries": [{"_type": "url", "url": "https://youtube.com/watch?v=x"}],
+        }
+        with self._ydl(tmp_path) as ydl:
+            emptied = module._without_foreign_entries(ydl, skeleton)
+
+        assert emptied["entries"] == []
+        with pytest.raises(NoVideoInPost):
+            clips_from_info(emptied, TWEET)
 
 
 class TestEveryProviderStaysOnItsOwnPlatform:
