@@ -12,7 +12,7 @@ dependencies = [
     "aiogram>=3.30.0",
     # Imported directly (services/redirects.py follows a Provider's short links),
     # so it is a declared dependency rather than something inherited from aiogram.
-    "aiohttp>=3.14.1",  # floor kept at the ports version; see [tool.uv] below
+    "aiohttp>=3.14.3",  # floor kept at the ports version; see [tool.uv] below
     # aiogram builds a proxied connector through this package and imports it
     # lazily, so without it AiohttpSession(proxy=…) raises at construction —
     # before any retry logic, on every start, in the one configuration
@@ -37,7 +37,7 @@ dependencies = [
 # Checked against the ports tree by scripts/check-freebsd-pins.py, which CI runs.
 [tool.uv]
 constraint-dependencies = [
-    "aiohttp==3.14.1",        # py312-aiohttp
+    "aiohttp==3.14.3",        # py312-aiohttp
     "pydantic-core==2.46.4",  # py312-pydantic-core
 ]
 
