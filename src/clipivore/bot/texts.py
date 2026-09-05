@@ -33,6 +33,8 @@ HELP_OVERFLOW_MISCONFIGURED = (
     "Larger clips cannot be delivered because Overflow delivery is configured incorrectly."
 )
 
+HELP_COMMAND_DESCRIPTION = "What I can download"
+
 NO_LINK = "No link I recognise. Send me a link to a post — /help lists what I can download."
 NOT_A_POST = "That short link doesn't lead to a post on {provider}."
 PROVIDER_MISCONFIGURED = (

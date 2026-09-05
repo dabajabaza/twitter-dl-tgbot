@@ -186,9 +186,19 @@ async def _establish_connection(bot: Bot) -> Any:
 
 
 async def _set_commands(bot: Bot, *, owner_id: int) -> None:
+    """Publish the command menu: /help for everyone, /overflow for the Owner.
+
+    Telegram picks one scope and shows that list alone — a chat scope replaces
+    the default rather than adding to it — so the Owner's list repeats /help.
+    """
+    help_command = BotCommand(command="help", description=texts.HELP_COMMAND_DESCRIPTION)
+    overflow_command = BotCommand(
+        command="overflow", description=texts.OVERFLOW_COMMAND_DESCRIPTION
+    )
     await bot.delete_my_commands()
+    await bot.set_my_commands([help_command])
     await bot.set_my_commands(
-        [BotCommand(command="overflow", description=texts.OVERFLOW_COMMAND_DESCRIPTION)],
+        [help_command, overflow_command],
         scope=BotCommandScopeChat(chat_id=owner_id),
     )
 
