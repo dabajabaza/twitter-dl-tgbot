@@ -31,13 +31,20 @@ async def test_only_the_owner_gets_overflow_in_telegrams_command_menu(
     await _set_commands(harness.bot, owner_id=OWNER_ID)
 
     configured = harness.session.calls_of(SetMyCommands)
-    assert len(configured) == 1
-    assert [(command.command, command.description) for command in configured[0].commands] == [
-        ("overflow", texts.OVERFLOW_COMMAND_DESCRIPTION)
+    assert len(configured) == 2
+    everyone, owner = configured
+    # Telegram shows one scope's list and ignores the rest, so the Owner's own
+    # list has to carry /help too, or /overflow would take its place.
+    assert [(command.command, command.description) for command in everyone.commands] == [
+        ("help", texts.HELP_COMMAND_DESCRIPTION)
     ]
-    scope = configured[0].scope
-    assert isinstance(scope, BotCommandScopeChat)
-    assert scope.chat_id == OWNER_ID
+    assert everyone.scope is None
+    assert [(command.command, command.description) for command in owner.commands] == [
+        ("help", texts.HELP_COMMAND_DESCRIPTION),
+        ("overflow", texts.OVERFLOW_COMMAND_DESCRIPTION),
+    ]
+    assert isinstance(owner.scope, BotCommandScopeChat)
+    assert owner.scope.chat_id == OWNER_ID
 
 
 async def test_a_guest_cannot_open_the_owner_setting(harness: BotHarness) -> None:
