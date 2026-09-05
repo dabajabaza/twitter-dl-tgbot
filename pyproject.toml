@@ -2,7 +2,7 @@
 name = "clipivore"
 description = "Personal Telegram bot that downloads videos from social posts"
 requires-python = ">=3.12"
-version = "0.5.1"
+version = "0.5.3"
 readme = "README.md"
 license = "MIT"
 authors = [

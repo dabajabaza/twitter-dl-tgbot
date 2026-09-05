@@ -275,7 +275,7 @@ wheels = [
 
 [[package]]
 name = "clipivore"
-version = "0.5.1"
+version = "0.5.3"
 source = { editable = "." }
 dependencies = [
     { name = "aiogram" },
